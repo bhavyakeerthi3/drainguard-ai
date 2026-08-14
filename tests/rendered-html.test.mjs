@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
-import { isDrainConfirmed, passesCleanupVerification } from "../lib/decisions.js";
+import { inspectionDecision, passesCleanupVerification } from "../lib/decisions.js";
 
 test("produces a deployable Next.js build", async () => {
   await access(new URL("../.next/BUILD_ID", import.meta.url));
@@ -48,18 +48,18 @@ test("verifies cleanup from a real after photo instead of a demo toggle", async 
 
 test("passes all 12 documented decision regression cases", () => {
   const cases = [
-    ["blocked control A", true, isDrainConfirmed(81)],
-    ["blocked control B", true, isDrainConfirmed(74)],
-    ["blocked control C", true, isDrainConfirmed(66)],
-    ["clear control A", true, isDrainConfirmed(79)],
-    ["clear control B", true, isDrainConfirmed(71)],
-    ["clear control C", true, isDrainConfirmed(63)],
+    ["blocked control A", "Dispatch now", inspectionDecision({ drainConfidence: 81, risk: 88 })],
+    ["blocked control B", "Inspect today", inspectionDecision({ drainConfidence: 74, risk: 72 })],
+    ["blocked control C", "Monitor", inspectionDecision({ drainConfidence: 66, risk: 54 })],
+    ["clear control A", "Monitor", inspectionDecision({ drainConfidence: 79, risk: 34 })],
+    ["clear control B", "Monitor", inspectionDecision({ drainConfidence: 71, risk: 25 })],
+    ["clear control C", "Monitor", inspectionDecision({ drainConfidence: 63, risk: 18 })],
     ["same drain cleaned A", true, passesCleanupVerification({ sameDrain: true, drainConfidence: 82, blockage: 31, litter: 28, reduction: 41 })],
     ["same drain cleaned B", true, passesCleanupVerification({ sameDrain: true, drainConfidence: 75, blockage: 44, litter: 39, reduction: 18 })],
     ["unchanged after", false, passesCleanupVerification({ sameDrain: true, drainConfidence: 82, blockage: 76, litter: 62, reduction: 0 })],
     ["different scene A", false, passesCleanupVerification({ sameDrain: false, drainConfidence: 81, blockage: 22, litter: 20, reduction: 60 })],
     ["different scene B", false, passesCleanupVerification({ sameDrain: false, drainConfidence: 76, blockage: 35, litter: 31, reduction: 36 })],
-    ["non-drain input", false, isDrainConfirmed(55)],
+    ["non-drain input", "Needs review", inspectionDecision({ drainConfidence: 55, risk: 84 })],
   ];
   for (const [name, expected, actual] of cases) assert.equal(actual, expected, name);
 });

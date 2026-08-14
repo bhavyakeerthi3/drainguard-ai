@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import NextImage from "next/image";
 import { DrainMap, type MapSite } from "./DrainMap";
-import { isDrainConfirmed, passesCleanupVerification, SAME_DRAIN_THRESHOLD } from "../lib/decisions.js";
+import { inspectionDecision, passesCleanupVerification, priorityAction, SAME_DRAIN_THRESHOLD } from "../lib/decisions.js";
 
 type Detection = {
   class: string;
@@ -283,12 +283,6 @@ function riskBand(risk: number) {
   return { label: "Low", tone: "low" };
 }
 
-function actionForRisk(risk: number) {
-  if (risk >= 80) return "Dispatch now";
-  if (risk >= 60) return "Inspect today";
-  return "Monitor";
-}
-
 export default function Home() {
   const [imageUrl, setImageUrl] = useState("/demo-drain.jpg");
   const [fileName, setFileName] = useState("EGLE stormwater sample");
@@ -340,12 +334,12 @@ export default function Home() {
         setWeatherStatus(localStatus);
         setSites((current) => current.map((site) => {
           if (site.id !== targetSiteId) return site;
-          const status = ["Needs review", "Verified clear"].includes(site.status) ? site.status : actionForRisk(locationRisk);
+          const status = ["Needs review", "Verified clear"].includes(site.status) ? site.status : priorityAction(locationRisk);
           return { ...site, risk: locationRisk, status, rainfall: localRain, weatherStatus: localStatus };
         }));
         setSelectedSite((current) => {
           if (current.id !== targetSiteId) return current;
-          const status = ["Needs review", "Verified clear"].includes(current.status) ? current.status : actionForRisk(locationRisk);
+          const status = ["Needs review", "Verified clear"].includes(current.status) ? current.status : priorityAction(locationRisk);
           return { ...current, risk: locationRisk, status, rainfall: localRain, weatherStatus: localStatus };
         });
       })
@@ -662,7 +656,8 @@ export default function Home() {
         drainConfidence,
         clamp(Math.round((modelUsed ? 78 : 59) + Math.min(predictions.length, 4) * 3), 0, 94),
       );
-      const drainConfirmed = isDrainConfirmed(drainConfidence);
+      const nextStatus = inspectionDecision({ drainConfidence, risk: scoreRisk(blockage, litter, rainfall) });
+      const drainConfirmed = nextStatus !== "Needs review";
 
       const finalAnalysis: Analysis = {
         blockage,
@@ -686,7 +681,6 @@ export default function Home() {
         },
       }));
       const resultRisk = scoreRisk(blockage, litter, rainfall);
-      const nextStatus = drainConfirmed ? actionForRisk(resultRisk) : "Needs review";
       setSites((current) => current.map((site) => (
         site.id === targetSiteId ? { ...site, risk: resultRisk, status: nextStatus } : site
       )));
@@ -753,7 +747,7 @@ export default function Home() {
         id: `DG-${nextLocationId.current++}`,
         place: result.place,
         risk,
-        status: actionForRisk(risk),
+        status: priorityAction(risk),
         lat: result.lat,
         lon: result.lon,
         rainfall,
@@ -782,7 +776,7 @@ export default function Home() {
   }
 
   function keepReportOpen(site: MapSite) {
-    const status = actionForRisk(site.risk);
+    const status = priorityAction(site.risk);
     setSites((current) => current.map((item) => item.id === site.id ? { ...item, status } : item));
     setSelectedSite((current) => current.id === site.id ? { ...current, status } : current);
   }
