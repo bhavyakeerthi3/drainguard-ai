@@ -54,12 +54,33 @@ function loadScript(src: string) {
     const script = existing ?? document.createElement("script");
     script.src = src;
     script.async = true;
+    const timeout = window.setTimeout(() => reject(new Error("Model resource timed out")), 15000);
     script.onload = () => {
+      window.clearTimeout(timeout);
       script.dataset.loaded = "true";
       resolve();
     };
-    script.onerror = () => reject(new Error("Model resource unavailable"));
+    script.onerror = () => {
+      window.clearTimeout(timeout);
+      reject(new Error("Model resource unavailable"));
+    };
     if (!existing) document.head.appendChild(script);
+  });
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error("Vision model timed out")), timeoutMs);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeout);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeout);
+        reject(error);
+      },
+    );
   });
 }
 
@@ -69,10 +90,15 @@ async function getDetector() {
       await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js");
       await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js");
       if (!window.cocoSsd) throw new Error("Vision model did not initialize");
-      return window.cocoSsd.load({ base: "lite_mobilenet_v2" });
+      return withTimeout(window.cocoSsd.load({ base: "lite_mobilenet_v2" }), 25000);
     })();
   }
-  return detectorPromise;
+  try {
+    return await detectorPromise;
+  } catch (error) {
+    detectorPromise = null;
+    throw error;
+  }
 }
 
 function clamp(value: number, min = 0, max = 100) {
@@ -189,22 +215,34 @@ export default function Home() {
     const nextUrl = URL.createObjectURL(file);
     setImageUrl(nextUrl);
     setFileName(file.name);
-    setAnalysis({ blockage: 0, litter: 0, confidence: 0, objects: [], signal: "Ready to analyze" });
-    setStage("idle");
+    setAnalysis({ blockage: 0, litter: 0, confidence: 0, objects: [], signal: "Starting visual scan" });
     setCleaned(false);
+    event.target.value = "";
+    void runAnalysis(nextUrl);
   }
 
-  async function runAnalysis() {
+  async function runAnalysis(source = imageUrl) {
     setStage("loading");
     setCleaned(false);
     try {
-      const image = await loadImage(imageUrl);
+      const image = await loadImage(source);
       const visual = extractVisualSignals(image);
+      const baseBlockage = clamp(Math.round(24 + visual.debrisTone * 64 + visual.texture * 88), 14, 94);
+      const baseLitter = clamp(Math.round(14 + visual.texture * 105), 8, 96);
+
+      setAnalysis({
+        blockage: baseBlockage,
+        litter: baseLitter,
+        confidence: 59,
+        objects: [],
+        signal: "Visual scan complete · refining objects",
+      });
+      setStage("detecting");
+
       let predictions: Detection[] = [];
       let modelUsed = false;
       try {
         const detector = await getDetector();
-        setStage("detecting");
         const raw = await detector.detect(image);
         predictions = raw
           .filter((item) => item.score >= 0.34)
@@ -221,14 +259,14 @@ export default function Home() {
           }));
         modelUsed = true;
       } catch {
-        setStage("detecting");
+        modelUsed = false;
       }
 
       const litterObjects = predictions.filter((item) =>
         ["bottle", "cup", "book", "handbag", "backpack", "umbrella"].includes(item.class),
       ).length;
-      const blockage = clamp(Math.round(24 + visual.debrisTone * 64 + visual.texture * 88 + litterObjects * 5), 14, 94);
-      const litter = clamp(Math.round(14 + visual.texture * 105 + litterObjects * 18), 8, 96);
+      const blockage = clamp(baseBlockage + litterObjects * 5, 14, 94);
+      const litter = clamp(baseLitter + litterObjects * 18, 8, 96);
       const confidence = clamp(Math.round((modelUsed ? 78 : 59) + Math.min(predictions.length, 4) * 3), 0, 94);
 
       setAnalysis({
@@ -340,10 +378,16 @@ export default function Home() {
             <div className="photo-actions">
               <input ref={fileInput} onChange={chooseImage} type="file" accept="image/*" hidden aria-label="Upload a drain photo" />
               <button className="button button-outline" onClick={() => fileInput.current?.click()}>Choose a photo</button>
-              <button className="button button-dark" disabled={stage === "loading" || stage === "detecting"} onClick={runAnalysis}>
-                {stage === "loading" ? "Loading edge model…" : stage === "detecting" ? "Reading the scene…" : "Analyze with AI"}
+              <button className="button button-dark" disabled={stage === "loading" || stage === "detecting"} onClick={() => void runAnalysis()}>
+                {stage === "loading" ? "Reading image…" : stage === "detecting" ? "Refining with AI…" : "Analyze again"}
               </button>
               <button className="sample-link" onClick={restoreSample}>Reset sample</button>
+              <p className={`analysis-progress stage-${stage}`} aria-live="polite">
+                {stage === "idle" && "Choose a photo — analysis starts automatically."}
+                {stage === "loading" && "Reading pixels and drain texture…"}
+                {stage === "detecting" && "Preliminary score ready. Object detector is refining it…"}
+                {stage === "done" && "✓ Analysis complete"}
+              </p>
             </div>
           </div>
 
