@@ -10,6 +10,8 @@ export type MapSite = {
   status: string;
   lat: number;
   lon: number;
+  rainfall?: number;
+  weatherStatus?: string;
 };
 
 type LeafletModule = typeof import("leaflet");
