@@ -99,7 +99,13 @@ export function DrainMap({
         direction: "center",
         className: "garbage-risk-tooltip",
       });
-      marker.bindPopup(`<strong>${site.id}</strong><br>${site.place}<br>Risk ${site.risk}/100`);
+      const popup = document.createElement("div");
+      const identifier = document.createElement("strong");
+      identifier.textContent = site.id;
+      popup.append(identifier, document.createElement("br"));
+      popup.append(document.createTextNode(site.place), document.createElement("br"));
+      popup.append(document.createTextNode(`Risk ${site.risk}/100`));
+      marker.bindPopup(popup);
       marker.on("click", () => onSelectRef.current(site));
       marker.addTo(markerLayer);
     }
