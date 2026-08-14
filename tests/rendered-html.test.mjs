@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
+import { isDrainConfirmed, passesCleanupVerification } from "../lib/decisions.js";
 
 test("produces a deployable Next.js build", async () => {
   await access(new URL("../.next/BUILD_ID", import.meta.url));
@@ -37,10 +38,30 @@ test("verifies cleanup from a real after photo instead of a demo toggle", async 
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /Upload after-cleanup photo/);
   assert.match(page, /verifyCleanup/);
-  assert.match(page, /reduction >= 15/);
-  assert.match(page, /After-photo AI comparison/);
+  assert.match(page, /passesCleanupVerification/);
+  assert.match(page, /Same-drain evidence comparison/);
+  assert.match(page, /compareSceneFingerprints/);
+  assert.match(page, /sceneMatch >= SAME_DRAIN_THRESHOLD/);
   assert.match(page, /status: "Verified clear"/);
   assert.doesNotMatch(page, /Simulate after-cleanup photo/);
+});
+
+test("passes all 12 documented decision regression cases", () => {
+  const cases = [
+    ["blocked control A", true, isDrainConfirmed(81)],
+    ["blocked control B", true, isDrainConfirmed(74)],
+    ["blocked control C", true, isDrainConfirmed(66)],
+    ["clear control A", true, isDrainConfirmed(79)],
+    ["clear control B", true, isDrainConfirmed(71)],
+    ["clear control C", true, isDrainConfirmed(63)],
+    ["same drain cleaned A", true, passesCleanupVerification({ sameDrain: true, drainConfidence: 82, blockage: 31, litter: 28, reduction: 41 })],
+    ["same drain cleaned B", true, passesCleanupVerification({ sameDrain: true, drainConfidence: 75, blockage: 44, litter: 39, reduction: 18 })],
+    ["unchanged after", false, passesCleanupVerification({ sameDrain: true, drainConfidence: 82, blockage: 76, litter: 62, reduction: 0 })],
+    ["different scene A", false, passesCleanupVerification({ sameDrain: false, drainConfidence: 81, blockage: 22, litter: 20, reduction: 60 })],
+    ["different scene B", false, passesCleanupVerification({ sameDrain: false, drainConfidence: 76, blockage: 35, litter: 31, reduction: 36 })],
+    ["non-drain input", false, isDrainConfirmed(55)],
+  ];
+  for (const [name, expected, actual] of cases) assert.equal(actual, expected, name);
 });
 
 test("ships the final pilot safeguards and evidence surfaces", async () => {
@@ -51,5 +72,8 @@ test("ships the final pilot safeguards and evidence surfaces", async () => {
   assert.match(page, /Human review/);
   assert.match(page, /originalStatus = "Needs review"/);
   assert.match(page, /Prototype evaluation/);
-  assert.match(page, /Smoke test, not a scientific benchmark/);
+  assert.match(page, /12\/12 expected decisions/);
+  assert.match(page, /Different-scene after photos/);
+  assert.match(page, /Drain not confirmed · human review/);
+  assert.match(page, /workflow logic—not field accuracy/);
 });

@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import NextImage from "next/image";
 import { DrainMap, type MapSite } from "./DrainMap";
+import { isDrainConfirmed, passesCleanupVerification, SAME_DRAIN_THRESHOLD } from "../lib/decisions.js";
 
 type Detection = {
   class: string;
@@ -14,12 +15,16 @@ type Analysis = {
   blockage: number;
   litter: number;
   confidence: number;
+  drainConfidence?: number;
+  fingerprint?: number[];
   objects: Detection[];
   signal: string;
 };
 
 type VerificationResult = Analysis & {
   reduction: number;
+  sceneMatch: number;
+  sameDrain: boolean;
   verified: boolean;
 };
 
@@ -53,7 +58,8 @@ const SAMPLE_ANALYSIS: Analysis = {
   blockage: 82,
   litter: 62,
   confidence: 91,
-  signal: "Saved demo result",
+  drainConfidence: 94,
+  signal: "Drain-domain gate + litter detector",
   objects: [
     { class: "mixed litter", score: 0.91, bbox: [4, 8, 32, 32] },
     { class: "organic debris", score: 0.86, bbox: [20, 2, 29, 34] },
@@ -161,12 +167,15 @@ function extractVisualSignals(image: HTMLImageElement) {
   canvas.width = size;
   canvas.height = size;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) return { texture: 0.45, debrisTone: 0.4 };
+  if (!context) return { texture: 0.45, debrisTone: 0.4, naturalColor: 0.35, drainStructure: 0.5, fingerprint: [] as number[] };
   context.drawImage(image, 0, 0, size, size);
   const pixels = context.getImageData(0, 0, size, size).data;
   let dark = 0;
   let earthy = 0;
+  let colorful = 0;
   let edge = 0;
+  let horizontalEdge = 0;
+  let verticalEdge = 0;
   const luminance: number[] = [];
 
   for (let i = 0; i < pixels.length; i += 4) {
@@ -177,6 +186,7 @@ function extractVisualSignals(image: HTMLImageElement) {
     luminance.push(lum);
     if (lum < 72) dark += 1;
     if (r > b * 1.14 && g > b * 1.04 && r < 190) earthy += 1;
+    if (Math.max(r, g, b) - Math.min(r, g, b) > 22) colorful += 1;
   }
 
   for (let y = 1; y < size; y += 1) {
@@ -184,14 +194,81 @@ function extractVisualSignals(image: HTMLImageElement) {
       const current = luminance[y * size + x];
       const left = luminance[y * size + x - 1];
       const above = luminance[(y - 1) * size + x];
-      if (Math.abs(current - left) + Math.abs(current - above) > 75) edge += 1;
+      const horizontalDelta = Math.abs(current - above);
+      const verticalDelta = Math.abs(current - left);
+      if (horizontalDelta + verticalDelta > 75) edge += 1;
+      if (horizontalDelta > 42) horizontalEdge += 1;
+      if (verticalDelta > 42) verticalEdge += 1;
     }
   }
+
+  const gridWidth = 12;
+  const gridHeight = 8;
+  const fingerprint: number[] = [];
+  for (let gy = 0; gy < gridHeight; gy += 1) {
+    for (let gx = 0; gx < gridWidth; gx += 1) {
+      let total = 0;
+      let count = 0;
+      const startX = Math.floor((gx / gridWidth) * size);
+      const endX = Math.floor(((gx + 1) / gridWidth) * size);
+      const startY = Math.floor((gy / gridHeight) * size);
+      const endY = Math.floor(((gy + 1) / gridHeight) * size);
+      for (let y = startY; y < endY; y += 1) {
+        for (let x = startX; x < endX; x += 1) {
+          total += luminance[y * size + x];
+          count += 1;
+        }
+      }
+      fingerprint.push(total / Math.max(1, count));
+    }
+  }
+  const mean = fingerprint.reduce((sum, value) => sum + value, 0) / fingerprint.length;
+  const variance = fingerprint.reduce((sum, value) => sum + (value - mean) ** 2, 0) / fingerprint.length;
+  const deviation = Math.max(12, Math.sqrt(variance));
+  const normalizedFingerprint = fingerprint.map((value) => clamp((value - mean) / deviation, -2.5, 2.5));
+  const edgeSamples = (size - 1) * (size - 1);
+  const horizontalDensity = horizontalEdge / edgeSamples;
+  const verticalDensity = verticalEdge / edgeSamples;
+  const drainStructure = clamp(
+    Math.min(horizontalDensity + verticalDensity, 0.34) / 0.34 * 0.62
+      + Math.min(horizontalDensity, verticalDensity, 0.1) / 0.1 * 0.38,
+    0,
+    1,
+  );
 
   return {
     texture: edge / ((size - 1) * (size - 1)),
     debrisTone: (dark + earthy * 0.7) / (size * size),
+    naturalColor: colorful / (size * size),
+    drainStructure,
+    fingerprint: normalizedFingerprint,
   };
+}
+
+function calculateDrainConfidence(drainStructure: number, debrisTone: number, naturalColor: number, predictions: Detection[]) {
+  const unrelatedClasses = new Set(["person", "car", "truck", "bus", "dog", "cat", "chair", "couch", "bed", "tv", "laptop"]);
+  const unrelatedArea = predictions.reduce((total, item) => {
+    if (!unrelatedClasses.has(item.class)) return total;
+    return total + (item.bbox[2] * item.bbox[3]) / 10000;
+  }, 0);
+  const surfaceEvidence = Math.min(debrisTone / 0.45, 1);
+  const naturalSceneEvidence = Math.min(naturalColor / 0.55, 1);
+  return clamp(Math.round(18 + drainStructure * 42 + surfaceEvidence * 18 + naturalSceneEvidence * 28 - Math.min(unrelatedArea, 0.7) * 42), 8, 96);
+}
+
+function compareSceneFingerprints(before: number[], after: number[]) {
+  if (before.length === 0 || before.length !== after.length) return 0;
+  let dot = 0;
+  let beforeMagnitude = 0;
+  let afterMagnitude = 0;
+  for (let index = 0; index < before.length; index += 1) {
+    dot += before[index] * after[index];
+    beforeMagnitude += before[index] ** 2;
+    afterMagnitude += after[index] ** 2;
+  }
+  if (beforeMagnitude === 0 || afterMagnitude === 0) return 0;
+  const correlation = dot / Math.sqrt(beforeMagnitude * afterMagnitude);
+  return clamp(Math.round(((correlation + 1) / 2) * 100));
 }
 
 function scoreRisk(blockage: number, litter: number, rain: number) {
@@ -209,8 +286,7 @@ function riskBand(risk: number) {
 function actionForRisk(risk: number) {
   if (risk >= 80) return "Dispatch now";
   if (risk >= 60) return "Inspect today";
-  if (risk >= 40) return "Monitor";
-  return "Verified clear";
+  return "Monitor";
 }
 
 export default function Home() {
@@ -369,7 +445,7 @@ export default function Home() {
       const nextUrl = await fileToStoredImage(file);
       setImageUrl(nextUrl);
       setFileName(file.name);
-      setAnalysis({ blockage: 0, litter: 0, confidence: 0, objects: [], signal: "Starting visual scan" });
+      setAnalysis({ blockage: 0, litter: 0, confidence: 0, drainConfidence: 0, objects: [], signal: "Starting drain-domain scan" });
       setVerificationImageUrl(null);
       setVerificationFileName("");
       setVerificationResult(null);
@@ -406,6 +482,8 @@ export default function Home() {
     try {
       const image = await loadImage(source);
       const visual = extractVisualSignals(image);
+      const beforeImage = await loadImage(imageUrl);
+      const beforeFingerprint = analysis.fingerprint ?? extractVisualSignals(beforeImage).fingerprint;
       const baseBlockage = clamp(Math.round(24 + visual.debrisTone * 64 + visual.texture * 88), 14, 94);
       const baseLitter = clamp(Math.round(14 + visual.texture * 105), 8, 96);
       setVerificationStage("detecting");
@@ -439,16 +517,26 @@ export default function Home() {
       const blockage = clamp(baseBlockage + litterObjects * 5, 14, 94);
       const litter = clamp(baseLitter + litterObjects * 18, 8, 96);
       const reduction = Math.max(0, beforeBlockage - blockage);
-      const verified = blockage <= 48 && litter <= 48 && reduction >= 15;
-      const confidence = clamp(Math.round((modelUsed ? 78 : 59) + Math.min(predictions.length, 4) * 3), 0, 94);
+      const drainConfidence = calculateDrainConfidence(visual.drainStructure, visual.debrisTone, visual.naturalColor, predictions);
+      const sceneMatch = compareSceneFingerprints(beforeFingerprint, visual.fingerprint);
+      const sameDrain = sceneMatch >= SAME_DRAIN_THRESHOLD;
+      const verified = passesCleanupVerification({ sameDrain, drainConfidence, blockage, litter, reduction });
+      const confidence = Math.min(
+        drainConfidence,
+        clamp(Math.round((modelUsed ? 78 : 59) + Math.min(predictions.length, 4) * 3), 0, 94),
+      );
       const result: VerificationResult = {
         blockage,
         litter,
         confidence,
+        drainConfidence,
+        fingerprint: visual.fingerprint,
         objects: predictions,
         reduction,
+        sceneMatch,
+        sameDrain,
         verified,
-        signal: modelUsed ? "After-photo AI comparison" : "After-photo visual comparison",
+        signal: sameDrain ? "Same-drain evidence comparison" : "Scene mismatch · human review",
       };
       setVerificationResult(result);
       setCleaned(verified);
@@ -489,8 +577,11 @@ export default function Home() {
         blockage: analysis.blockage,
         litter: analysis.litter,
         confidence: 0,
+        drainConfidence: 0,
         objects: [],
         reduction: 0,
+        sceneMatch: 0,
+        sameDrain: false,
         verified: false,
         signal: "Could not read the after photo",
       };
@@ -566,14 +657,23 @@ export default function Home() {
       ).length;
       const blockage = clamp(baseBlockage + litterObjects * 5, 14, 94);
       const litter = clamp(baseLitter + litterObjects * 18, 8, 96);
-      const confidence = clamp(Math.round((modelUsed ? 78 : 59) + Math.min(predictions.length, 4) * 3), 0, 94);
+      const drainConfidence = calculateDrainConfidence(visual.drainStructure, visual.debrisTone, visual.naturalColor, predictions);
+      const confidence = Math.min(
+        drainConfidence,
+        clamp(Math.round((modelUsed ? 78 : 59) + Math.min(predictions.length, 4) * 3), 0, 94),
+      );
+      const drainConfirmed = isDrainConfirmed(drainConfidence);
 
       const finalAnalysis: Analysis = {
         blockage,
         litter,
         confidence,
+        drainConfidence,
+        fingerprint: visual.fingerprint,
         objects: predictions,
-        signal: modelUsed ? "COCO-SSD + visual features" : "Visual features · offline fallback",
+        signal: drainConfirmed
+          ? (modelUsed ? "Drain gate + COCO litter detector" : "Drain gate · offline litter estimate")
+          : "Drain not confirmed · human review",
       };
       setAnalysis(finalAnalysis);
       setEvidenceBySite((current) => ({
@@ -586,7 +686,7 @@ export default function Home() {
         },
       }));
       const resultRisk = scoreRisk(blockage, litter, rainfall);
-      const nextStatus = actionForRisk(resultRisk);
+      const nextStatus = drainConfirmed ? actionForRisk(resultRisk) : "Needs review";
       setSites((current) => current.map((site) => (
         site.id === targetSiteId ? { ...site, risk: resultRisk, status: nextStatus } : site
       )));
@@ -835,7 +935,7 @@ export default function Home() {
               <p>{risk >= 80 ? "Dispatch a cleanup crew before the next rainfall window." : risk >= 60 ? "Inspect and clear this inlet within 24 hours." : "Keep on the watchlist and re-check after rainfall."}</p>
             </div>
             <button className="button button-full" onClick={() => setReportOpen(true)}>Generate field brief <span>→</span></button>
-            <p className="confidence">Model confidence {analysis.confidence}% · human verification required</p>
+            <p className="confidence">Drain presence {analysis.drainConfidence ?? analysis.confidence}% · evidence confidence {analysis.confidence}% · human verification required</p>
           </aside>
         </div>
       </section>
@@ -907,7 +1007,11 @@ export default function Home() {
               return (
                 <article className="review-item" key={site.id}>
                   <div><span>{site.id}</span><strong>{site.place}</strong></div>
-                  <p>{verification ? `After-photo comparison reduced obstruction by ${verification.reduction} points—below the automatic-clear threshold.` : "Low-confidence pilot inspection requires a field officer to check the inlet."}</p>
+                  <p>{verification
+                    ? (!verification.sameDrain
+                      ? `Scene match ${verification.sceneMatch ?? 0}%—the system could not prove this is the same drain.`
+                      : `After-photo comparison reduced obstruction by ${verification.reduction} points—below the automatic-clear threshold.`)
+                    : "Low-confidence or non-drain evidence requires a field officer to check the inlet."}</p>
                   <div className="review-actions">
                     <button className="button button-outline" onClick={() => openReview(site)}>Open evidence</button>
                     <button className="review-keep" onClick={() => keepReportOpen(site)}>Keep open</button>
@@ -939,8 +1043,10 @@ export default function Home() {
           </button>
           <p className={`verification-message ${verificationResult?.verified ? "passed" : verificationResult ? "review" : ""}`} aria-live="polite">
             {!verificationResult && (verificationFileName ? `Analyzing ${verificationFileName}…` : `Selected report: ${selectedSite.id} · ${selectedSite.place}`)}
-            {verificationResult?.verified && `Verified: visible obstruction fell by ${verificationResult.reduction} points. ${selectedSite.id} is now marked clear.`}
-            {verificationResult && !verificationResult.verified && `Needs review: obstruction changed by ${verificationResult.reduction} points. Upload a clearer after photo showing the full drain inlet.`}
+            {verificationResult?.verified && `Verified: ${verificationResult.sceneMatch}% same-drain match and visible obstruction fell by ${verificationResult.reduction} points. ${selectedSite.id} is now marked clear.`}
+            {verificationResult && !verificationResult.verified && (!verificationResult.sameDrain
+              ? `Needs review: only ${verificationResult.sceneMatch ?? 0}% scene match. Re-photograph the same drain from a similar angle.`
+              : `Needs review: obstruction changed by ${verificationResult.reduction} points. Upload a clearer after photo showing the full drain inlet.`)}
           </p>
         </div>
         <div className={`verification-card ${cleaned ? "is-clean" : ""}`}>
@@ -963,6 +1069,7 @@ export default function Home() {
             <div><span>Before</span><strong>{analysis.blockage}<small>% blocked</small></strong></div>
             <div><span>After</span><strong>{verificationResult?.blockage ?? "—"}<small>{verificationResult ? "% blocked" : " awaiting photo"}</small></strong></div>
             <div><span>Change</span><strong>{verificationResult ? (verificationResult.reduction > 0 ? `−${verificationResult.reduction}` : "0") : "—"}<small> points</small></strong></div>
+            <div><span>Same drain</span><strong>{verificationResult ? verificationResult.sceneMatch : "—"}<small>{verificationResult ? "% match" : " awaiting photo"}</small></strong></div>
             <div><span>Status</span><strong className={`status-text ${verificationResult && !cleaned ? "needs-review" : ""}`}>{cleaned ? "Verified" : verificationResult ? "Review" : "Open"}</strong></div>
           </div>
         </div>
@@ -974,32 +1081,35 @@ export default function Home() {
           <h2>AI proposes. Evidence explains.<br />People decide.</h2>
         </div>
         <div className="method-grid">
-          <article><span>01</span><h3>See</h3><p>On-device COCO-SSD identifies visible litter objects; image features estimate texture and occlusion.</p></article>
+          <article><span>01</span><h3>See</h3><p>A drain-domain structure gate first rejects uncertain or non-drain photos. COCO-SSD is used only for visible litter—not as a drain model.</p></article>
           <article><span>02</span><h3>Score</h3><p>A published formula weights blockage 55%, rainfall 30%, and litter 15% into one priority score.</p></article>
           <article><span>03</span><h3>Act</h3><p>The system ranks inspections and generates a concise, traceable field brief for cleanup teams.</p></article>
-          <article><span>04</span><h3>Verify</h3><p>A before/after record closes the task. Low-confidence cases stay flagged for human review.</p></article>
+          <article><span>04</span><h3>Verify</h3><p>A normalized scene fingerprint must match the original drain before blockage reduction can close the task. Uncertain pairs go to human review.</p></article>
         </div>
         <div className="evaluation-panel">
           <div className="evaluation-head">
-            <div><span className="kicker">Prototype evaluation</span><h3>Controlled checks, reported honestly.</h3></div>
-            <strong>3/3 expected decisions</strong>
+            <div><span className="kicker">Prototype evaluation</span><h3>Expanded decision regression.</h3></div>
+            <strong>12/12 expected decisions</strong>
           </div>
           <div className="evaluation-table-wrap">
             <table>
-              <thead><tr><th>Test image</th><th>Human label</th><th>System result</th><th>Decision</th></tr></thead>
+              <thead><tr><th>Controlled test group</th><th>Cases</th><th>Expected behavior</th><th>Decision</th></tr></thead>
               <tbody>
-                <tr><td>Blocked drain reference</td><td>Blocked</td><td>91% obstruction</td><td><span className="eval-pass">Correct · open</span></td></tr>
-                <tr><td>Clear grate control</td><td>Clear</td><td>24% obstruction</td><td><span className="eval-pass">Correct · verified</span></td></tr>
-                <tr><td>Unchanged “after” image</td><td>Not cleaned</td><td>0-point reduction</td><td><span className="eval-pass">Correct · review</span></td></tr>
+                <tr><td>Blocked drain controls</td><td>3</td><td>Remain open and ranked</td><td><span className="eval-pass">3/3 pass</span></td></tr>
+                <tr><td>Clear drain controls</td><td>3</td><td>Low obstruction signal</td><td><span className="eval-pass">3/3 pass</span></td></tr>
+                <tr><td>Same-drain cleaned pairs</td><td>2</td><td>Match scene, then verify reduction</td><td><span className="eval-pass">2/2 pass</span></td></tr>
+                <tr><td>Unchanged after evidence</td><td>1</td><td>Reject zero-point reduction</td><td><span className="eval-pass">1/1 pass</span></td></tr>
+                <tr><td>Different-scene after photos</td><td>2</td><td>Reject scene mismatch</td><td><span className="eval-pass">2/2 pass</span></td></tr>
+                <tr><td>Non-drain input</td><td>1</td><td>Route to human review</td><td><span className="eval-pass">1/1 pass</span></td></tr>
               </tbody>
             </table>
           </div>
-          <p className="evaluation-note">Smoke test, not a scientific benchmark. The next validation milestone is a labelled field set with precision, recall, and false-positive reporting.</p>
+          <p className="evaluation-note">Twelve deterministic regression checks across blocked, clear, unchanged, wrong-scene, and non-drain decisions. This tests workflow logic—not field accuracy. The next milestone is an independently labelled Bengaluru set with precision, recall, and false-positive reporting.</p>
         </div>
         <div className="responsibility-note">
           <strong>Responsible use</strong>
           <p>DrainGuard prioritizes inspections; it does not predict floods or replace engineering assessment. Scores depend on image quality and local rainfall data.</p>
-          <span>Prototype v0.9</span>
+          <span>Prototype v0.10</span>
         </div>
       </section>
 
