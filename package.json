@@ -1,7 +1,15 @@
 {
   "name": "drainguard-ai",
-  "version": "0.1.0",
+  "version": "0.10.0",
+  "description": "Explainable AI-assisted storm-drain cleanup prioritization and verification.",
   "private": true,
+  "author": "Bhavya Keerthi",
+  "license": "MIT",
+  "homepage": "https://drainguard-ai-earth.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bhavyakeerthi3/drainguard-ai.git"
+  },
   "engines": {
     "node": ">=22.13.0"
   },
