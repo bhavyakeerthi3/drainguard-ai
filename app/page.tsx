@@ -32,8 +32,8 @@ const SAMPLE_ANALYSIS: Analysis = {
   confidence: 91,
   signal: "Saved demo result",
   objects: [
-    { class: "mixed litter", score: 0.91, bbox: [44, 48, 285, 190] },
-    { class: "organic debris", score: 0.86, bbox: [180, 12, 260, 205] },
+    { class: "mixed litter", score: 0.91, bbox: [4, 8, 32, 32] },
+    { class: "organic debris", score: 0.86, bbox: [20, 2, 29, 34] },
   ],
 };
 
@@ -211,7 +211,12 @@ export default function Home() {
           .map((item) => ({
             class: item.class,
             score: item.score,
-            bbox: [item.bbox[0], item.bbox[1], item.bbox[2], item.bbox[3]],
+            bbox: [
+              (item.bbox[0] / image.naturalWidth) * 100,
+              (item.bbox[1] / image.naturalHeight) * 100,
+              (item.bbox[2] / image.naturalWidth) * 100,
+              (item.bbox[3] / image.naturalHeight) * 100,
+            ],
           }));
         modelUsed = true;
       } catch {
@@ -313,18 +318,15 @@ export default function Home() {
               <img id="inspection-image" src={imageUrl} alt="Storm drain submitted for inspection" />
               <div className="scan-grid" aria-hidden="true" />
               {analysis.objects.map((object, index) => {
-                const image = typeof document !== "undefined" ? document.getElementById("inspection-image") as HTMLImageElement | null : null;
-                const naturalWidth = image?.naturalWidth || 900;
-                const naturalHeight = image?.naturalHeight || 600;
                 return (
                   <div
                     className="detection-box"
                     key={`${object.class}-${index}`}
                     style={{
-                      left: `${(object.bbox[0] / naturalWidth) * 100}%`,
-                      top: `${(object.bbox[1] / naturalHeight) * 100}%`,
-                      width: `${(object.bbox[2] / naturalWidth) * 100}%`,
-                      height: `${(object.bbox[3] / naturalHeight) * 100}%`,
+                      left: `${object.bbox[0]}%`,
+                      top: `${object.bbox[1]}%`,
+                      width: `${object.bbox[2]}%`,
+                      height: `${object.bbox[3]}%`,
                     }}
                   >
                     <span>{object.class} · {Math.round(object.score * 100)}%</span>
