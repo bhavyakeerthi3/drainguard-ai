@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import NextImage from "next/image";
 
 type Detection = {
   class: string;
@@ -315,7 +316,7 @@ export default function Home() {
               <div className="file-name" title={fileName}>{fileName}</div>
             </div>
             <div className="photo-stage">
-              <img id="inspection-image" src={imageUrl} alt="Storm drain submitted for inspection" />
+              <NextImage id="inspection-image" src={imageUrl} alt="Storm drain submitted for inspection" fill sizes="(max-width: 1000px) 100vw, 62vw" unoptimized />
               <div className="scan-grid" aria-hidden="true" />
               {analysis.objects.map((object, index) => {
                 return (
@@ -444,7 +445,7 @@ export default function Home() {
         </div>
         <div className={`verification-card ${cleaned ? "is-clean" : ""}`}>
           <div className="verify-visual">
-            <img src="/demo-drain.jpg" alt="Drain before cleanup" />
+            <NextImage src="/demo-drain.jpg" alt="Drain before cleanup" fill sizes="(max-width: 1000px) 100vw, 54vw" />
             <div className="clean-mask"><span>Flow restored</span></div>
           </div>
           <div className="verify-stats">
