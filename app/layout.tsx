@@ -18,13 +18,13 @@ export const metadata: Metadata = {
     description: "Turn one street photo into an explainable drain-cleanup priority.",
     type: "website",
     url: "/",
-    images: [{ url: "/og.png", width: 1536, height: 1024, alt: "DrainGuard AI storm-drain risk map" }],
+    images: [{ url: "/og.jpg", width: 1536, height: 1024, alt: "DrainGuard AI storm-drain risk map" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "DrainGuard AI",
     description: "See a drain. Stop a flood.",
-    images: ["/og.png"],
+    images: ["/og.jpg"],
   },
 };
 

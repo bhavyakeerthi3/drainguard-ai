@@ -6,7 +6,7 @@ DrainGuard AI is an explainable cleanup-prioritization system for storm drains. 
 
 [Live demo](https://drainguard-ai-earth.vercel.app) · [Devpost submission notes](docs/DEVPOST.md) · [Architecture and evaluation](docs/ARCHITECTURE.md)
 
-![DrainGuard AI dashboard](public/og.png)
+![DrainGuard AI dashboard](public/og.jpg)
 
 Built for the **GatewayGS & AEI Initiative: AI 4 Earth Hackathon**.
 
