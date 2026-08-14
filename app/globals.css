@@ -188,7 +188,7 @@ button { cursor: pointer; }
 .clean-mask { position: absolute; inset: 0; display: grid; place-items: center; background: linear-gradient(135deg, rgba(17,81,60,.15), rgba(223,255,104,.1)); opacity: 0; transition: opacity .4s; }
 .clean-mask span { background: var(--lime); color: var(--ink); padding: 9px 13px; font-family: var(--font-geist-mono); text-transform: uppercase; font-size: 11px; letter-spacing: .07em; }
 .verification-card.is-clean .after-pane img { filter: saturate(.9) brightness(.88); }.verification-card.is-clean .clean-mask { opacity: 1; }
-.verify-stats { display: grid; grid-template-columns: repeat(4,1fr); }
+.verify-stats { display: grid; grid-template-columns: repeat(5,1fr); }
 .verify-stats > div { padding: 18px 20px; border-right: 1px solid rgba(255,255,255,.12); }.verify-stats > div:last-child { border: 0; }
 .verify-stats span { display: block; color: #92a39a; font-family: var(--font-geist-mono); text-transform: uppercase; font-size: 10px; letter-spacing: .09em; }
 .verify-stats strong { display: block; font-size: 29px; margin-top: 4px; }.verify-stats small { font-size: 12px; color: #92a39a; }.verify-stats .status-text { color: var(--lime); font-size: 18px; margin-top: 11px; }
