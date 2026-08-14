@@ -23,6 +23,22 @@ type VerificationResult = Analysis & {
   verified: boolean;
 };
 
+type EvidenceRecord = {
+  beforeImage: string;
+  beforeName: string;
+  beforeAnalysis: Analysis;
+  afterImage?: string;
+  afterName?: string;
+  verification?: VerificationResult;
+  updatedAt: string;
+};
+
+type PersistedPilot = {
+  version: 1;
+  sites: MapSite[];
+  evidence: Record<string, EvidenceRecord>;
+};
+
 type Detector = {
   detect: (image: HTMLImageElement) => Promise<Array<{ class: string; score: number; bbox: number[] }>>;
 };
@@ -45,11 +61,13 @@ const SAMPLE_ANALYSIS: Analysis = {
 };
 
 const INITIAL_SITES: MapSite[] = [
-  { id: "DG-104", place: "5th Cross · Koramangala", risk: 84, status: "Dispatch now", lat: 12.9352, lon: 77.6245 },
-  { id: "DG-098", place: "Market Road · Shantinagar", risk: 76, status: "Inspect today", lat: 12.9536, lon: 77.5937 },
-  { id: "DG-091", place: "1st Main · Indiranagar", risk: 61, status: "Monitor", lat: 12.9784, lon: 77.6408 },
-  { id: "DG-087", place: "8th Block · Jayanagar", risk: 35, status: "Verified clear", lat: 12.925, lon: 77.5938 },
+  { id: "DG-104", place: "5th Cross · Koramangala", risk: 84, status: "Dispatch now", lat: 12.9352, lon: 77.6245, rainfall: 18 },
+  { id: "DG-098", place: "Market Road · Shantinagar", risk: 76, status: "Inspect today", lat: 12.9536, lon: 77.5937, rainfall: 18 },
+  { id: "DG-091", place: "1st Main · Indiranagar", risk: 61, status: "Needs review", lat: 12.9784, lon: 77.6408, rainfall: 18 },
+  { id: "DG-087", place: "8th Block · Jayanagar", risk: 35, status: "Verified clear", lat: 12.925, lon: 77.5938, rainfall: 18 },
 ];
+
+const PILOT_STORAGE_KEY = "drainguard-pilot-v1";
 
 let detectorPromise: Promise<Detector> | null = null;
 
@@ -119,6 +137,24 @@ async function loadImage(src: string) {
   return image;
 }
 
+async function fileToStoredImage(file: File) {
+  const temporaryUrl = URL.createObjectURL(file);
+  try {
+    const image = await loadImage(temporaryUrl);
+    const maxDimension = 960;
+    const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Image canvas unavailable");
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/jpeg", 0.74);
+  } finally {
+    URL.revokeObjectURL(temporaryUrl);
+  }
+}
+
 function extractVisualSignals(image: HTMLImageElement) {
   const canvas = document.createElement("canvas");
   const size = 96;
@@ -181,9 +217,8 @@ export default function Home() {
   const [imageUrl, setImageUrl] = useState("/demo-drain.jpg");
   const [fileName, setFileName] = useState("EGLE stormwater sample");
   const [analysis, setAnalysis] = useState<Analysis>(SAMPLE_ANALYSIS);
-  const [mode, setMode] = useState<"surge" | "live">("surge");
-  const [liveRain, setLiveRain] = useState(18);
-  const [weatherStatus, setWeatherStatus] = useState("Bengaluru forecast");
+  const [mode, setMode] = useState<"surge" | "live">("live");
+  const [weatherStatus, setWeatherStatus] = useState("Loading location forecast");
   const [stage, setStage] = useState<"idle" | "loading" | "detecting" | "done">("idle");
   const [sites, setSites] = useState<MapSite[]>(INITIAL_SITES);
   const [selectedSite, setSelectedSite] = useState<MapSite>(INITIAL_SITES[0]);
@@ -197,32 +232,95 @@ export default function Home() {
   const [verificationFileName, setVerificationFileName] = useState("");
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
   const [verificationStage, setVerificationStage] = useState<"idle" | "loading" | "detecting" | "done">("idle");
+  const [evidenceBySite, setEvidenceBySite] = useState<Record<string, EvidenceRecord>>({});
+  const [persistenceReady, setPersistenceReady] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const verificationInput = useRef<HTMLInputElement>(null);
   const nextLocationId = useRef(105);
 
-  const rainfall = mode === "surge" ? 64 : liveRain;
+  const rainfall = mode === "surge" ? 64 : (selectedSite.rainfall ?? 18);
   const effectiveAnalysis = cleaned && verificationResult ? verificationResult : analysis;
   const risk = scoreRisk(effectiveAnalysis.blockage, effectiveAnalysis.litter, rainfall);
   const band = riskBand(risk);
   const sortedSites = useMemo(() => [...sites].sort((a, b) => b.risk - a.risk), [sites]);
+  const reviewSites = useMemo(() => sites.filter((site) => site.status === "Needs review"), [sites]);
 
   useEffect(() => {
     const controller = new AbortController();
+    const targetSiteId = selectedSite.id;
     fetch(
-      "https://api.open-meteo.com/v1/forecast?latitude=12.9716&longitude=77.5946&daily=precipitation_sum,precipitation_probability_max&timezone=auto&forecast_days=1",
+      `https://api.open-meteo.com/v1/forecast?latitude=${selectedSite.lat}&longitude=${selectedSite.lon}&daily=precipitation_sum,precipitation_probability_max&timezone=auto&forecast_days=1`,
       { signal: controller.signal },
     )
       .then((response) => response.json())
       .then((data) => {
         const precipitation = Number(data?.daily?.precipitation_sum?.[0]);
         const probability = Number(data?.daily?.precipitation_probability_max?.[0]);
-        if (Number.isFinite(precipitation)) setLiveRain(Math.max(precipitation, 1));
-        if (Number.isFinite(probability)) setWeatherStatus(`${probability}% rain probability`);
+        const localRain = Number.isFinite(precipitation) ? Math.max(precipitation, 1) : 18;
+        const localStatus = Number.isFinite(probability)
+          ? `${probability}% rain probability · ${selectedSite.place}`
+          : `Location forecast · ${selectedSite.place}`;
+        const locationRisk = scoreRisk(effectiveAnalysis.blockage, effectiveAnalysis.litter, localRain);
+        setWeatherStatus(localStatus);
+        setSites((current) => current.map((site) => {
+          if (site.id !== targetSiteId) return site;
+          const status = ["Needs review", "Verified clear"].includes(site.status) ? site.status : actionForRisk(locationRisk);
+          return { ...site, risk: locationRisk, status, rainfall: localRain, weatherStatus: localStatus };
+        }));
+        setSelectedSite((current) => {
+          if (current.id !== targetSiteId) return current;
+          const status = ["Needs review", "Verified clear"].includes(current.status) ? current.status : actionForRisk(locationRisk);
+          return { ...current, risk: locationRisk, status, rainfall: localRain, weatherStatus: localStatus };
+        });
       })
-      .catch(() => setWeatherStatus("Forecast fallback"));
+      .catch(() => {
+        if (!controller.signal.aborted) setWeatherStatus(`Forecast fallback · ${selectedSite.place}`);
+      });
     return () => controller.abort();
+  }, [effectiveAnalysis.blockage, effectiveAnalysis.litter, selectedSite.id, selectedSite.lat, selectedSite.lon, selectedSite.place]);
+
+  /* eslint-disable react-hooks/set-state-in-effect -- Hydrate the device-persistent pilot after the client mounts. */
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(PILOT_STORAGE_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as PersistedPilot;
+        if (saved.version === 1 && saved.sites.length > 0) {
+          setSites(saved.sites);
+          setEvidenceBySite(saved.evidence ?? {});
+          const first = saved.sites[0];
+          setSelectedSite(first);
+          const record = saved.evidence?.[first.id];
+          if (record) {
+            setImageUrl(record.beforeImage);
+            setFileName(record.beforeName);
+            setAnalysis(record.beforeAnalysis);
+            setVerificationImageUrl(record.afterImage ?? null);
+            setVerificationFileName(record.afterName ?? "");
+            setVerificationResult(record.verification ?? null);
+            setCleaned(Boolean(record.verification?.verified));
+          }
+          const ids = saved.sites.map((site) => Number(site.id.replace(/\D/g, ""))).filter(Number.isFinite);
+          nextLocationId.current = Math.max(104, ...ids) + 1;
+        }
+      }
+    } catch {
+      window.localStorage.removeItem(PILOT_STORAGE_KEY);
+    } finally {
+      setPersistenceReady(true);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!persistenceReady) return;
+    const payload: PersistedPilot = { version: 1, sites, evidence: evidenceBySite };
+    try {
+      window.localStorage.setItem(PILOT_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // Storage can be full or disabled; the live session remains usable.
+    }
+  }, [evidenceBySite, persistenceReady, sites]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     return () => {
@@ -236,45 +334,72 @@ export default function Home() {
     };
   }, [verificationImageUrl]);
 
-  function selectSite(site: MapSite) {
+  function selectSite(site: MapSite, suppliedRecord?: EvidenceRecord) {
+    const record = suppliedRecord ?? evidenceBySite[site.id];
     setSelectedSite(site);
-    setVerificationImageUrl(null);
-    setVerificationFileName("");
-    setVerificationResult(null);
-    setVerificationStage("idle");
-    setCleaned(false);
+    setWeatherStatus(site.weatherStatus ?? `Loading forecast · ${site.place}`);
+    if (record) {
+      setImageUrl(record.beforeImage);
+      setFileName(record.beforeName);
+      setAnalysis(record.beforeAnalysis);
+      setVerificationImageUrl(record.afterImage ?? null);
+      setVerificationFileName(record.afterName ?? "");
+      setVerificationResult(record.verification ?? null);
+      setVerificationStage(record.verification ? "done" : "idle");
+      setCleaned(Boolean(record.verification?.verified));
+    } else {
+      setImageUrl("/demo-drain.jpg");
+      setFileName("EGLE stormwater sample");
+      setAnalysis(SAMPLE_ANALYSIS);
+      setVerificationImageUrl(null);
+      setVerificationFileName("");
+      setVerificationResult(null);
+      setVerificationStage("idle");
+      setCleaned(false);
+    }
   }
 
-  function chooseImage(event: ChangeEvent<HTMLInputElement>) {
+  async function chooseImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) return;
-    const nextUrl = URL.createObjectURL(file);
-    setImageUrl(nextUrl);
-    setFileName(file.name);
-    setAnalysis({ blockage: 0, litter: 0, confidence: 0, objects: [], signal: "Starting visual scan" });
-    setVerificationImageUrl(null);
-    setVerificationFileName("");
-    setVerificationResult(null);
-    setVerificationStage("idle");
-    setCleaned(false);
     event.target.value = "";
-    void runAnalysis(nextUrl);
+    setStage("loading");
+    try {
+      const nextUrl = await fileToStoredImage(file);
+      setImageUrl(nextUrl);
+      setFileName(file.name);
+      setAnalysis({ blockage: 0, litter: 0, confidence: 0, objects: [], signal: "Starting visual scan" });
+      setVerificationImageUrl(null);
+      setVerificationFileName("");
+      setVerificationResult(null);
+      setVerificationStage("idle");
+      setCleaned(false);
+      await runAnalysis(nextUrl, file.name);
+    } catch {
+      setAnalysis((current) => ({ ...current, signal: "Could not prepare this image" }));
+      setStage("idle");
+    }
   }
 
-  function chooseVerificationImage(event: ChangeEvent<HTMLInputElement>) {
+  async function chooseVerificationImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file || !file.type.startsWith("image/")) return;
-    const nextUrl = URL.createObjectURL(file);
-    setVerificationImageUrl(nextUrl);
-    setVerificationFileName(file.name);
-    setVerificationResult(null);
-    setCleaned(false);
     event.target.value = "";
-    void verifyCleanup(nextUrl);
+    setVerificationStage("loading");
+    try {
+      const nextUrl = await fileToStoredImage(file);
+      setVerificationImageUrl(nextUrl);
+      setVerificationFileName(file.name);
+      setVerificationResult(null);
+      setCleaned(false);
+      await verifyCleanup(nextUrl, file.name);
+    } catch {
+      setVerificationStage("idle");
+    }
   }
 
-  async function verifyCleanup(source: string) {
+  async function verifyCleanup(source: string, sourceName = verificationFileName) {
     const targetSiteId = selectedSite.id;
     const beforeBlockage = analysis.blockage;
     setVerificationStage("loading");
@@ -327,6 +452,18 @@ export default function Home() {
       };
       setVerificationResult(result);
       setCleaned(verified);
+      setEvidenceBySite((current) => ({
+        ...current,
+        [targetSiteId]: {
+          beforeImage: current[targetSiteId]?.beforeImage ?? imageUrl,
+          beforeName: current[targetSiteId]?.beforeName ?? fileName,
+          beforeAnalysis: current[targetSiteId]?.beforeAnalysis ?? analysis,
+          afterImage: source,
+          afterName: sourceName,
+          verification: result,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
 
       if (verified) {
         const residualRisk = scoreRisk(blockage, litter, rainfall);
@@ -338,7 +475,7 @@ export default function Home() {
         ));
       } else {
         const originalRisk = scoreRisk(analysis.blockage, analysis.litter, rainfall);
-        const originalStatus = actionForRisk(originalRisk);
+        const originalStatus = "Needs review";
         setSites((current) => current.map((site) => (
           site.id === targetSiteId ? { ...site, risk: originalRisk, status: originalStatus } : site
         )));
@@ -348,7 +485,7 @@ export default function Home() {
       }
       setVerificationStage("done");
     } catch {
-      setVerificationResult({
+      const failedResult: VerificationResult = {
         blockage: analysis.blockage,
         litter: analysis.litter,
         confidence: 0,
@@ -356,9 +493,22 @@ export default function Home() {
         reduction: 0,
         verified: false,
         signal: "Could not read the after photo",
-      });
+      };
+      setVerificationResult(failedResult);
+      setEvidenceBySite((current) => ({
+        ...current,
+        [targetSiteId]: {
+          beforeImage: current[targetSiteId]?.beforeImage ?? imageUrl,
+          beforeName: current[targetSiteId]?.beforeName ?? fileName,
+          beforeAnalysis: current[targetSiteId]?.beforeAnalysis ?? analysis,
+          afterImage: source,
+          afterName: sourceName,
+          verification: failedResult,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
       const originalRisk = scoreRisk(analysis.blockage, analysis.litter, rainfall);
-      const originalStatus = actionForRisk(originalRisk);
+      const originalStatus = "Needs review";
       setSites((current) => current.map((site) => (
         site.id === targetSiteId ? { ...site, risk: originalRisk, status: originalStatus } : site
       )));
@@ -369,7 +519,7 @@ export default function Home() {
     }
   }
 
-  async function runAnalysis(source = imageUrl) {
+  async function runAnalysis(source = imageUrl, sourceName = fileName) {
     const targetSiteId = selectedSite.id;
     setStage("loading");
     setCleaned(false);
@@ -418,13 +568,23 @@ export default function Home() {
       const litter = clamp(baseLitter + litterObjects * 18, 8, 96);
       const confidence = clamp(Math.round((modelUsed ? 78 : 59) + Math.min(predictions.length, 4) * 3), 0, 94);
 
-      setAnalysis({
+      const finalAnalysis: Analysis = {
         blockage,
         litter,
         confidence,
         objects: predictions,
         signal: modelUsed ? "COCO-SSD + visual features" : "Visual features · offline fallback",
-      });
+      };
+      setAnalysis(finalAnalysis);
+      setEvidenceBySite((current) => ({
+        ...current,
+        [targetSiteId]: {
+          beforeImage: source,
+          beforeName: sourceName,
+          beforeAnalysis: finalAnalysis,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
       const resultRisk = scoreRisk(blockage, litter, rainfall);
       const nextStatus = actionForRisk(resultRisk);
       setSites((current) => current.map((site) => (
@@ -496,15 +656,35 @@ export default function Home() {
         status: actionForRisk(risk),
         lat: result.lat,
         lon: result.lon,
+        rainfall,
+        weatherStatus,
+      };
+      const evidence: EvidenceRecord = {
+        beforeImage: imageUrl,
+        beforeName: fileName,
+        beforeAnalysis: analysis,
+        updatedAt: new Date().toISOString(),
       };
       setSites((current) => [site, ...current]);
-      selectSite(site);
+      setEvidenceBySite((current) => ({ ...current, [site.id]: evidence }));
+      selectSite(site, evidence);
       setLocationStatus(`Garbage marker added at ${site.place}.`);
     } catch {
       setLocationStatus("Could not reach the location service. Please try again.");
     } finally {
       setLocating(false);
     }
+  }
+
+  function openReview(site: MapSite) {
+    selectSite(site);
+    window.requestAnimationFrame(() => document.getElementById("verify")?.scrollIntoView({ behavior: "smooth" }));
+  }
+
+  function keepReportOpen(site: MapSite) {
+    const status = actionForRisk(site.risk);
+    setSites((current) => current.map((item) => item.id === site.id ? { ...item, status } : item));
+    setSelectedSite((current) => current.id === site.id ? { ...current, status } : current);
   }
 
   function restoreSample() {
@@ -669,6 +849,12 @@ export default function Home() {
           <p>Crews see the highest-risk inlet first—not simply the newest report.</p>
         </div>
 
+        <div className="persistence-note">
+          <span className={persistenceReady ? "saved" : ""} />
+          <strong>{persistenceReady ? "Device-persistent pilot" : "Loading saved reports"}</strong>
+          <p>Reports, scores, and compressed before/after evidence survive refreshes on this inspection device. Shared multi-user storage requires a connected municipal database.</p>
+        </div>
+
         <form className="location-search" onSubmit={locateGarbage}>
           <label htmlFor="garbage-location">
             <span>Where is the garbage?</span>
@@ -708,9 +894,32 @@ export default function Home() {
             </div>
           </div>
         </div>
+
+        <div className="review-board" aria-label="Human review queue">
+          <div className="review-board-head">
+            <div><span className="kicker">Human review</span><h3>Evidence that needs a person.</h3></div>
+            <strong>{reviewSites.length} waiting</strong>
+          </div>
+          <div className="review-list">
+            {reviewSites.length === 0 && <p className="review-empty">No uncertain reports. Failed or low-confidence checks will appear here automatically.</p>}
+            {reviewSites.map((site) => {
+              const verification = evidenceBySite[site.id]?.verification;
+              return (
+                <article className="review-item" key={site.id}>
+                  <div><span>{site.id}</span><strong>{site.place}</strong></div>
+                  <p>{verification ? `After-photo comparison reduced obstruction by ${verification.reduction} points—below the automatic-clear threshold.` : "Low-confidence pilot inspection requires a field officer to check the inlet."}</p>
+                  <div className="review-actions">
+                    <button className="button button-outline" onClick={() => openReview(site)}>Open evidence</button>
+                    <button className="review-keep" onClick={() => keepReportOpen(site)}>Keep open</button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
       </section>
 
-      <section className="verification-section">
+      <section className="verification-section" id="verify">
         <div className="verification-copy">
           <span className="kicker">03 · Verify</span>
           <h2>Close the loop,<br />not just the ticket.</h2>
@@ -769,6 +978,23 @@ export default function Home() {
           <article><span>02</span><h3>Score</h3><p>A published formula weights blockage 55%, rainfall 30%, and litter 15% into one priority score.</p></article>
           <article><span>03</span><h3>Act</h3><p>The system ranks inspections and generates a concise, traceable field brief for cleanup teams.</p></article>
           <article><span>04</span><h3>Verify</h3><p>A before/after record closes the task. Low-confidence cases stay flagged for human review.</p></article>
+        </div>
+        <div className="evaluation-panel">
+          <div className="evaluation-head">
+            <div><span className="kicker">Prototype evaluation</span><h3>Controlled checks, reported honestly.</h3></div>
+            <strong>3/3 expected decisions</strong>
+          </div>
+          <div className="evaluation-table-wrap">
+            <table>
+              <thead><tr><th>Test image</th><th>Human label</th><th>System result</th><th>Decision</th></tr></thead>
+              <tbody>
+                <tr><td>Blocked drain reference</td><td>Blocked</td><td>91% obstruction</td><td><span className="eval-pass">Correct · open</span></td></tr>
+                <tr><td>Clear grate control</td><td>Clear</td><td>24% obstruction</td><td><span className="eval-pass">Correct · verified</span></td></tr>
+                <tr><td>Unchanged “after” image</td><td>Not cleaned</td><td>0-point reduction</td><td><span className="eval-pass">Correct · review</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="evaluation-note">Smoke test, not a scientific benchmark. The next validation milestone is a labelled field set with precision, recall, and false-positive reporting.</p>
         </div>
         <div className="responsibility-note">
           <strong>Responsible use</strong>

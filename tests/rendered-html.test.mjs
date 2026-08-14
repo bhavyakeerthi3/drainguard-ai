@@ -42,3 +42,14 @@ test("verifies cleanup from a real after photo instead of a demo toggle", async 
   assert.match(page, /status: "Verified clear"/);
   assert.doesNotMatch(page, /Simulate after-cleanup photo/);
 });
+
+test("ships the final pilot safeguards and evidence surfaces", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /drainguard-pilot-v1/);
+  assert.match(page, /localStorage\.setItem/);
+  assert.match(page, /latitude=\$\{selectedSite\.lat\}/);
+  assert.match(page, /Human review/);
+  assert.match(page, /originalStatus = "Needs review"/);
+  assert.match(page, /Prototype evaluation/);
+  assert.match(page, /Smoke test, not a scientific benchmark/);
+});
