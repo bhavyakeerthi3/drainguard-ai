@@ -32,3 +32,13 @@ test("connects location search to a real garbage-risk map", async () => {
   assert.match(map, /tile\.openstreetmap\.org/);
   assert.match(map, /map\.flyTo/);
 });
+
+test("verifies cleanup from a real after photo instead of a demo toggle", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /Upload after-cleanup photo/);
+  assert.match(page, /verifyCleanup/);
+  assert.match(page, /reduction >= 15/);
+  assert.match(page, /After-photo AI comparison/);
+  assert.match(page, /status: "Verified clear"/);
+  assert.doesNotMatch(page, /Simulate after-cleanup photo/);
+});

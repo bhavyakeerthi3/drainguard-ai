@@ -14,10 +14,11 @@ export type MapSite = {
 
 type LeafletModule = typeof import("leaflet");
 
-function markerColor(risk: number) {
-  if (risk >= 80) return "#ff745f";
-  if (risk >= 60) return "#f5bd4e";
-  if (risk >= 40) return "#89c9c0";
+function markerColor(site: MapSite) {
+  if (site.status === "Verified clear") return "#dfff68";
+  if (site.risk >= 80) return "#ff745f";
+  if (site.risk >= 60) return "#f5bd4e";
+  if (site.risk >= 40) return "#89c9c0";
   return "#dfff68";
 }
 
@@ -88,7 +89,7 @@ export function DrainMap({
         radius: selected ? 14 : 11,
         color: selected ? "#0b1713" : "#ffffff",
         weight: selected ? 4 : 3,
-        fillColor: markerColor(site.risk),
+        fillColor: markerColor(site),
         fillOpacity: 1,
       });
       marker.bindTooltip(String(site.risk), {
