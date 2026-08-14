@@ -21,3 +21,14 @@ test("ships the explainable risk model and responsible-use language", async () =
   assert.match(page, /COCO-SSD/);
   assert.match(layout, /See a drain\. Stop a flood\./);
 });
+
+test("connects location search to a real garbage-risk map", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const map = await readFile(new URL("../app/DrainMap.tsx", import.meta.url), "utf8");
+  assert.match(page, /Where is the garbage\?/);
+  assert.match(page, /nominatim\.openstreetmap\.org\/search/);
+  assert.match(page, /geocoding-api\.open-meteo\.com/);
+  assert.match(page, /<DrainMap sites=\{sites\}/);
+  assert.match(map, /tile\.openstreetmap\.org/);
+  assert.match(map, /map\.flyTo/);
+});

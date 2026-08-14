@@ -1,7 +1,8 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import NextImage from "next/image";
+import { DrainMap, type MapSite } from "./DrainMap";
 
 type Detection = {
   class: string;
@@ -38,11 +39,11 @@ const SAMPLE_ANALYSIS: Analysis = {
   ],
 };
 
-const queue = [
-  { id: "DG-104", place: "5th Cross · Koramangala", risk: 84, status: "Dispatch now", x: 68, y: 31 },
-  { id: "DG-098", place: "Market Road · Shantinagar", risk: 76, status: "Inspect today", x: 37, y: 52 },
-  { id: "DG-091", place: "1st Main · Indiranagar", risk: 61, status: "Monitor", x: 76, y: 68 },
-  { id: "DG-087", place: "8th Block · Jayanagar", risk: 35, status: "Verified clear", x: 29, y: 77 },
+const INITIAL_SITES: MapSite[] = [
+  { id: "DG-104", place: "5th Cross · Koramangala", risk: 84, status: "Dispatch now", lat: 12.9352, lon: 77.6245 },
+  { id: "DG-098", place: "Market Road · Shantinagar", risk: 76, status: "Inspect today", lat: 12.9536, lon: 77.5937 },
+  { id: "DG-091", place: "1st Main · Indiranagar", risk: 61, status: "Monitor", lat: 12.9784, lon: 77.6408 },
+  { id: "DG-087", place: "8th Block · Jayanagar", risk: 35, status: "Verified clear", lat: 12.925, lon: 77.5938 },
 ];
 
 let detectorPromise: Promise<Detector> | null = null;
@@ -164,6 +165,13 @@ function riskBand(risk: number) {
   return { label: "Low", tone: "low" };
 }
 
+function actionForRisk(risk: number) {
+  if (risk >= 80) return "Dispatch now";
+  if (risk >= 60) return "Inspect today";
+  if (risk >= 40) return "Monitor";
+  return "Verified clear";
+}
+
 export default function Home() {
   const [imageUrl, setImageUrl] = useState("/demo-drain.jpg");
   const [fileName, setFileName] = useState("EGLE stormwater sample");
@@ -172,11 +180,16 @@ export default function Home() {
   const [liveRain, setLiveRain] = useState(18);
   const [weatherStatus, setWeatherStatus] = useState("Bengaluru forecast");
   const [stage, setStage] = useState<"idle" | "loading" | "detecting" | "done">("idle");
-  const [selectedSite, setSelectedSite] = useState(queue[0]);
+  const [sites, setSites] = useState<MapSite[]>(INITIAL_SITES);
+  const [selectedSite, setSelectedSite] = useState<MapSite>(INITIAL_SITES[0]);
+  const [locationInput, setLocationInput] = useState("");
+  const [locationStatus, setLocationStatus] = useState("");
+  const [locating, setLocating] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [cleaned, setCleaned] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const nextLocationId = useRef(105);
 
   const rainfall = mode === "surge" ? 64 : liveRain;
   const risk = useMemo(
@@ -184,6 +197,7 @@ export default function Home() {
     [analysis, cleaned, rainfall],
   );
   const band = riskBand(risk);
+  const sortedSites = useMemo(() => [...sites].sort((a, b) => b.risk - a.risk), [sites]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -222,6 +236,7 @@ export default function Home() {
   }
 
   async function runAnalysis(source = imageUrl) {
+    const targetSiteId = selectedSite.id;
     setStage("loading");
     setCleaned(false);
     try {
@@ -276,10 +291,85 @@ export default function Home() {
         objects: predictions,
         signal: modelUsed ? "COCO-SSD + visual features" : "Visual features · offline fallback",
       });
+      const resultRisk = scoreRisk(blockage, litter, rainfall);
+      const nextStatus = actionForRisk(resultRisk);
+      setSites((current) => current.map((site) => (
+        site.id === targetSiteId ? { ...site, risk: resultRisk, status: nextStatus } : site
+      )));
+      setSelectedSite((current) => (
+        current.id === targetSiteId ? { ...current, risk: resultRisk, status: nextStatus } : current
+      ));
       setStage("done");
     } catch {
       setAnalysis((current) => ({ ...current, signal: "Could not read this image" }));
       setStage("idle");
+    }
+  }
+
+  async function locateGarbage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const query = locationInput.trim();
+    if (!query) return;
+
+    setLocating(true);
+    setLocationStatus("Finding that location…");
+    try {
+      let result: { lat: number; lon: number; place: string } | null = null;
+      const nominatimResponse = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&q=${encodeURIComponent(query)}`,
+        { headers: { "Accept-Language": "en" } },
+      ).catch(() => null);
+      if (nominatimResponse?.ok) {
+        const matches = await nominatimResponse.json() as Array<{ lat: string; lon: string; display_name: string }>;
+        const match = matches[0];
+        if (match) {
+          result = {
+            lat: Number(match.lat),
+            lon: Number(match.lon),
+            place: match.display_name.split(",").slice(0, 3).join(" · "),
+          };
+        }
+      }
+
+      if (!result) {
+        const fallbackResponse = await fetch(
+          `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=1&language=en&format=json`,
+        );
+        if (fallbackResponse.ok) {
+          const data = await fallbackResponse.json() as {
+            results?: Array<{ latitude: number; longitude: number; name: string; admin1?: string; country?: string }>;
+          };
+          const match = data.results?.[0];
+          if (match) {
+            result = {
+              lat: match.latitude,
+              lon: match.longitude,
+              place: [match.name, match.admin1, match.country].filter(Boolean).join(" · "),
+            };
+          }
+        }
+      }
+
+      if (!result || !Number.isFinite(result.lat) || !Number.isFinite(result.lon)) {
+        setLocationStatus("Location not found. Try a neighborhood plus city.");
+        return;
+      }
+
+      const site: MapSite = {
+        id: `DG-${nextLocationId.current++}`,
+        place: result.place,
+        risk,
+        status: actionForRisk(risk),
+        lat: result.lat,
+        lon: result.lon,
+      };
+      setSites((current) => [site, ...current]);
+      setSelectedSite(site);
+      setLocationStatus(`Garbage marker added at ${site.place}.`);
+    } catch {
+      setLocationStatus("Could not reach the location service. Please try again.");
+    } finally {
+      setLocating(false);
     }
   }
 
@@ -372,7 +462,7 @@ export default function Home() {
                   </div>
                 );
               })}
-              <span className="photo-location">5th Cross · Koramangala</span>
+              <span className="photo-location">{selectedSite.place}</span>
               <span className="photo-time">14 Aug · 18:42</span>
             </div>
             <div className="photo-actions">
@@ -441,30 +531,34 @@ export default function Home() {
           <p>Crews see the highest-risk inlet first—not simply the newest report.</p>
         </div>
 
+        <form className="location-search" onSubmit={locateGarbage}>
+          <label htmlFor="garbage-location">
+            <span>Where is the garbage?</span>
+            <input
+              id="garbage-location"
+              value={locationInput}
+              onChange={(event) => setLocationInput(event.target.value)}
+              placeholder="e.g. Whitefield, Bengaluru"
+              autoComplete="street-address"
+            />
+          </label>
+          <button className="button button-dark" disabled={locating || !locationInput.trim()}>
+            {locating ? "Finding location…" : "Show garbage on map →"}
+          </button>
+          <p aria-live="polite">{locationStatus || "Enter a street, neighborhood, landmark, or city to place a garbage report."}</p>
+        </form>
+
         <div className="queue-grid">
           <div className="map-card" aria-label="Priority map of inspected drains">
-            <div className="map-top"><span>Ward 151 · Koramangala</span><span>12 inspections</span></div>
-            <div className="map-canvas">
-              <div className="road road-a" /><div className="road road-b" /><div className="road road-c" /><div className="road road-d" />
-              <div className="waterway">Vrishabhavathi feeder</div>
-              {queue.map((site) => (
-                <button
-                  key={site.id}
-                  className={`map-pin risk-${riskBand(site.risk).tone} ${selectedSite.id === site.id ? "selected" : ""}`}
-                  style={{ left: `${site.x}%`, top: `${site.y}%` }}
-                  onClick={() => setSelectedSite(site)}
-                  aria-label={`${site.id}, risk ${site.risk}`}
-                >{site.risk}</button>
-              ))}
-              <div className="map-key"><span><i className="key-critical" /> Critical</span><span><i className="key-watch" /> Watch</span><span><i className="key-low" /> Clear</span></div>
-            </div>
+            <div className="map-top"><span>{selectedSite.place}</span><span>{sites.length} mapped reports</span></div>
+            <DrainMap sites={sites} selectedId={selectedSite.id} onSelect={setSelectedSite} />
           </div>
 
           <div className="queue-card">
             <div className="queue-heading"><span>Cleanup queue</span><span>Sorted by risk</span></div>
-            {queue.map((site, index) => (
+            {sortedSites.map((site, index) => (
               <button className={`queue-row ${selectedSite.id === site.id ? "active" : ""}`} key={site.id} onClick={() => setSelectedSite(site)}>
-                <span className="queue-rank">0{index + 1}</span>
+                <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
                 <span className="queue-place"><strong>{site.place}</strong><small>{site.id} · {site.status}</small></span>
                 <span className={`queue-risk ${riskBand(site.risk).tone}`}>{site.risk}</span>
               </button>
@@ -525,8 +619,8 @@ export default function Home() {
       </footer>
 
       {reportOpen && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setReportOpen(false)}>
-          <section className="report-modal" role="dialog" aria-modal="true" aria-labelledby="report-title" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="modal-backdrop" role="presentation">
+          <section className="report-modal" role="dialog" aria-modal="true" aria-labelledby="report-title">
             <button className="modal-close" onClick={() => setReportOpen(false)} aria-label="Close field brief">×</button>
             <span className="kicker">Actionable evidence</span>
             <h2 id="report-title">Field brief ready.</h2>
