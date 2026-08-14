@@ -18,6 +18,11 @@ type Analysis = {
   signal: string;
 };
 
+type VerificationResult = Analysis & {
+  reduction: number;
+  verified: boolean;
+};
+
 type Detector = {
   detect: (image: HTMLImageElement) => Promise<Array<{ class: string; score: number; bbox: number[] }>>;
 };
@@ -188,14 +193,17 @@ export default function Home() {
   const [reportOpen, setReportOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [cleaned, setCleaned] = useState(false);
+  const [verificationImageUrl, setVerificationImageUrl] = useState<string | null>(null);
+  const [verificationFileName, setVerificationFileName] = useState("");
+  const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
+  const [verificationStage, setVerificationStage] = useState<"idle" | "loading" | "detecting" | "done">("idle");
   const fileInput = useRef<HTMLInputElement>(null);
+  const verificationInput = useRef<HTMLInputElement>(null);
   const nextLocationId = useRef(105);
 
   const rainfall = mode === "surge" ? 64 : liveRain;
-  const risk = useMemo(
-    () => (cleaned ? scoreRisk(16, 9, rainfall) : scoreRisk(analysis.blockage, analysis.litter, rainfall)),
-    [analysis, cleaned, rainfall],
-  );
+  const effectiveAnalysis = cleaned && verificationResult ? verificationResult : analysis;
+  const risk = scoreRisk(effectiveAnalysis.blockage, effectiveAnalysis.litter, rainfall);
   const band = riskBand(risk);
   const sortedSites = useMemo(() => [...sites].sort((a, b) => b.risk - a.risk), [sites]);
 
@@ -222,6 +230,21 @@ export default function Home() {
     };
   }, [imageUrl]);
 
+  useEffect(() => {
+    return () => {
+      if (verificationImageUrl?.startsWith("blob:")) URL.revokeObjectURL(verificationImageUrl);
+    };
+  }, [verificationImageUrl]);
+
+  function selectSite(site: MapSite) {
+    setSelectedSite(site);
+    setVerificationImageUrl(null);
+    setVerificationFileName("");
+    setVerificationResult(null);
+    setVerificationStage("idle");
+    setCleaned(false);
+  }
+
   function chooseImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -230,9 +253,120 @@ export default function Home() {
     setImageUrl(nextUrl);
     setFileName(file.name);
     setAnalysis({ blockage: 0, litter: 0, confidence: 0, objects: [], signal: "Starting visual scan" });
+    setVerificationImageUrl(null);
+    setVerificationFileName("");
+    setVerificationResult(null);
+    setVerificationStage("idle");
     setCleaned(false);
     event.target.value = "";
     void runAnalysis(nextUrl);
+  }
+
+  function chooseVerificationImage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    const nextUrl = URL.createObjectURL(file);
+    setVerificationImageUrl(nextUrl);
+    setVerificationFileName(file.name);
+    setVerificationResult(null);
+    setCleaned(false);
+    event.target.value = "";
+    void verifyCleanup(nextUrl);
+  }
+
+  async function verifyCleanup(source: string) {
+    const targetSiteId = selectedSite.id;
+    const beforeBlockage = analysis.blockage;
+    setVerificationStage("loading");
+    try {
+      const image = await loadImage(source);
+      const visual = extractVisualSignals(image);
+      const baseBlockage = clamp(Math.round(24 + visual.debrisTone * 64 + visual.texture * 88), 14, 94);
+      const baseLitter = clamp(Math.round(14 + visual.texture * 105), 8, 96);
+      setVerificationStage("detecting");
+
+      let predictions: Detection[] = [];
+      let modelUsed = false;
+      try {
+        const detector = await getDetector();
+        const raw = await detector.detect(image);
+        predictions = raw
+          .filter((item) => item.score >= 0.34)
+          .slice(0, 5)
+          .map((item) => ({
+            class: item.class,
+            score: item.score,
+            bbox: [
+              (item.bbox[0] / image.naturalWidth) * 100,
+              (item.bbox[1] / image.naturalHeight) * 100,
+              (item.bbox[2] / image.naturalWidth) * 100,
+              (item.bbox[3] / image.naturalHeight) * 100,
+            ],
+          }));
+        modelUsed = true;
+      } catch {
+        modelUsed = false;
+      }
+
+      const litterObjects = predictions.filter((item) =>
+        ["bottle", "cup", "book", "handbag", "backpack", "umbrella"].includes(item.class),
+      ).length;
+      const blockage = clamp(baseBlockage + litterObjects * 5, 14, 94);
+      const litter = clamp(baseLitter + litterObjects * 18, 8, 96);
+      const reduction = Math.max(0, beforeBlockage - blockage);
+      const verified = blockage <= 48 && litter <= 48 && reduction >= 15;
+      const confidence = clamp(Math.round((modelUsed ? 78 : 59) + Math.min(predictions.length, 4) * 3), 0, 94);
+      const result: VerificationResult = {
+        blockage,
+        litter,
+        confidence,
+        objects: predictions,
+        reduction,
+        verified,
+        signal: modelUsed ? "After-photo AI comparison" : "After-photo visual comparison",
+      };
+      setVerificationResult(result);
+      setCleaned(verified);
+
+      if (verified) {
+        const residualRisk = scoreRisk(blockage, litter, rainfall);
+        setSites((current) => current.map((site) => (
+          site.id === targetSiteId ? { ...site, risk: residualRisk, status: "Verified clear" } : site
+        )));
+        setSelectedSite((current) => (
+          current.id === targetSiteId ? { ...current, risk: residualRisk, status: "Verified clear" } : current
+        ));
+      } else {
+        const originalRisk = scoreRisk(analysis.blockage, analysis.litter, rainfall);
+        const originalStatus = actionForRisk(originalRisk);
+        setSites((current) => current.map((site) => (
+          site.id === targetSiteId ? { ...site, risk: originalRisk, status: originalStatus } : site
+        )));
+        setSelectedSite((current) => (
+          current.id === targetSiteId ? { ...current, risk: originalRisk, status: originalStatus } : current
+        ));
+      }
+      setVerificationStage("done");
+    } catch {
+      setVerificationResult({
+        blockage: analysis.blockage,
+        litter: analysis.litter,
+        confidence: 0,
+        objects: [],
+        reduction: 0,
+        verified: false,
+        signal: "Could not read the after photo",
+      });
+      const originalRisk = scoreRisk(analysis.blockage, analysis.litter, rainfall);
+      const originalStatus = actionForRisk(originalRisk);
+      setSites((current) => current.map((site) => (
+        site.id === targetSiteId ? { ...site, risk: originalRisk, status: originalStatus } : site
+      )));
+      setSelectedSite((current) => (
+        current.id === targetSiteId ? { ...current, risk: originalRisk, status: originalStatus } : current
+      ));
+      setVerificationStage("done");
+    }
   }
 
   async function runAnalysis(source = imageUrl) {
@@ -364,7 +498,7 @@ export default function Home() {
         lon: result.lon,
       };
       setSites((current) => [site, ...current]);
-      setSelectedSite(site);
+      selectSite(site);
       setLocationStatus(`Garbage marker added at ${site.place}.`);
     } catch {
       setLocationStatus("Could not reach the location service. Please try again.");
@@ -378,11 +512,15 @@ export default function Home() {
     setFileName("EGLE stormwater sample");
     setAnalysis(SAMPLE_ANALYSIS);
     setMode("surge");
+    setVerificationImageUrl(null);
+    setVerificationFileName("");
+    setVerificationResult(null);
+    setVerificationStage("idle");
     setCleaned(false);
     setStage("idle");
   }
 
-  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nPriority: ${band.label.toUpperCase()} (${risk}/100)\nLocation: ${selectedSite.place}\nObserved blockage: ${cleaned ? 16 : analysis.blockage}%\nLitter signal: ${cleaned ? 9 : analysis.litter}%\nRain scenario: ${rainfall.toFixed(1)} mm / 24h\n\nRecommended action: ${risk >= 80 ? "Dispatch a cleanup crew before the next rainfall window. Photograph the cleared inlet to close the task." : risk >= 60 ? "Inspect and clear within 24 hours." : "Monitor and re-check after rainfall."}\n\nThis is a prioritization aid, not a flood prediction or emergency alert.`;
+  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nPriority: ${band.label.toUpperCase()} (${risk}/100)\nLocation: ${selectedSite.place}\nObserved blockage: ${effectiveAnalysis.blockage}%\nLitter signal: ${effectiveAnalysis.litter}%\nVerification: ${cleaned ? `Passed · ${verificationResult?.reduction ?? 0} point obstruction reduction` : "Pending field evidence"}\nRain scenario: ${rainfall.toFixed(1)} mm / 24h\n\nRecommended action: ${cleaned ? "Cleanup verified from the after photo. Continue routine monitoring." : risk >= 80 ? "Dispatch a cleanup crew before the next rainfall window. Photograph the cleared inlet to close the task." : risk >= 60 ? "Inspect and clear within 24 hours." : "Monitor and re-check after rainfall."}\n\nThis is a prioritization aid, not a flood prediction or emergency alert.`;
 
   async function copyReport() {
     await navigator.clipboard.writeText(report);
@@ -492,7 +630,7 @@ export default function Home() {
             <div className="signal-list">
               <div className="signal-row">
                 <div><span className="signal-icon">◩</span><span>Drain obstruction<small>Visual occlusion estimate</small></span></div>
-                <strong>{cleaned ? 16 : analysis.blockage}%</strong>
+                <strong>{effectiveAnalysis.blockage}%</strong>
               </div>
               <div className="signal-row">
                 <div><span className="signal-icon">⌁</span><span>Rainfall exposure<small>{mode === "surge" ? "Demo monsoon scenario" : weatherStatus}</small></span></div>
@@ -500,7 +638,7 @@ export default function Home() {
               </div>
               <div className="signal-row">
                 <div><span className="signal-icon">◇</span><span>Litter signal<small>Objects + visual texture</small></span></div>
-                <strong>{cleaned ? 9 : analysis.litter}%</strong>
+                <strong>{effectiveAnalysis.litter}%</strong>
               </div>
             </div>
 
@@ -551,13 +689,13 @@ export default function Home() {
         <div className="queue-grid">
           <div className="map-card" aria-label="Priority map of inspected drains">
             <div className="map-top"><span>{selectedSite.place}</span><span>{sites.length} mapped reports</span></div>
-            <DrainMap sites={sites} selectedId={selectedSite.id} onSelect={setSelectedSite} />
+            <DrainMap sites={sites} selectedId={selectedSite.id} onSelect={selectSite} />
           </div>
 
           <div className="queue-card">
             <div className="queue-heading"><span>Cleanup queue</span><span>Sorted by risk</span></div>
             {sortedSites.map((site, index) => (
-              <button className={`queue-row ${selectedSite.id === site.id ? "active" : ""}`} key={site.id} onClick={() => setSelectedSite(site)}>
+              <button className={`queue-row ${selectedSite.id === site.id ? "active" : ""}`} key={site.id} onClick={() => selectSite(site)}>
                 <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
                 <span className="queue-place"><strong>{site.place}</strong><small>{site.id} · {site.status}</small></span>
                 <span className={`queue-risk ${riskBand(site.risk).tone}`}>{site.risk}</span>
@@ -576,20 +714,47 @@ export default function Home() {
         <div className="verification-copy">
           <span className="kicker">03 · Verify</span>
           <h2>Close the loop,<br />not just the ticket.</h2>
-          <p>A second photo verifies that the inlet is clear and updates the ward’s readiness score. Every intervention becomes measurable evidence.</p>
-          <button className={`button ${cleaned ? "button-success" : ""}`} onClick={() => setCleaned((value) => !value)}>
-            {cleaned ? "✓ Cleanup verified" : "Simulate after-cleanup photo"}
+          <p>After the crew cleans this drain, upload a second photo. The AI compares obstruction and litter with the original evidence before closing the report.</p>
+          <div className="verify-flow" aria-label="Verification steps">
+            <span><b>1</b> Upload after photo</span>
+            <span><b>2</b> AI compares evidence</span>
+            <span><b>3</b> Map status updates</span>
+          </div>
+          <input ref={verificationInput} onChange={chooseVerificationImage} type="file" accept="image/*" hidden aria-label="Upload after-cleanup photo" />
+          <button
+            className={`button ${cleaned ? "button-success" : ""}`}
+            disabled={verificationStage === "loading" || verificationStage === "detecting"}
+            onClick={() => verificationInput.current?.click()}
+          >
+            {verificationStage === "loading" ? "Reading after photo…" : verificationStage === "detecting" ? "Comparing with AI…" : cleaned ? "✓ Verified · upload another" : "Upload after-cleanup photo →"}
           </button>
+          <p className={`verification-message ${verificationResult?.verified ? "passed" : verificationResult ? "review" : ""}`} aria-live="polite">
+            {!verificationResult && (verificationFileName ? `Analyzing ${verificationFileName}…` : `Selected report: ${selectedSite.id} · ${selectedSite.place}`)}
+            {verificationResult?.verified && `Verified: visible obstruction fell by ${verificationResult.reduction} points. ${selectedSite.id} is now marked clear.`}
+            {verificationResult && !verificationResult.verified && `Needs review: obstruction changed by ${verificationResult.reduction} points. Upload a clearer after photo showing the full drain inlet.`}
+          </p>
         </div>
         <div className={`verification-card ${cleaned ? "is-clean" : ""}`}>
-          <div className="verify-visual">
-            <NextImage src="/demo-drain.jpg" alt="Drain before cleanup" fill sizes="(max-width: 1000px) 100vw, 54vw" />
-            <div className="clean-mask"><span>Flow restored</span></div>
+          <div className="comparison-grid">
+            <div className="comparison-pane">
+              <NextImage src={imageUrl} alt="Drain before cleanup" fill sizes="(max-width: 1000px) 50vw, 27vw" unoptimized />
+              <span className="comparison-label">Before · {analysis.blockage}% blocked</span>
+            </div>
+            <div className={`comparison-pane after-pane ${verificationImageUrl ? "has-photo" : ""}`}>
+              {verificationImageUrl ? (
+                <NextImage src={verificationImageUrl} alt="Drain after cleanup" fill sizes="(max-width: 1000px) 50vw, 27vw" unoptimized />
+              ) : (
+                <div className="after-placeholder"><span>+</span><p>After photo appears here</p></div>
+              )}
+              <span className="comparison-label">After · {verificationResult ? `${verificationResult.blockage}% blocked` : "waiting"}</span>
+              {cleaned && <div className="clean-mask"><span>✓ Evidence passed</span></div>}
+            </div>
           </div>
           <div className="verify-stats">
-            <div><span>Risk</span><strong>{cleaned ? "23" : "84"}<small>/100</small></strong></div>
-            <div><span>Obstruction</span><strong>{cleaned ? "16" : "82"}<small>%</small></strong></div>
-            <div><span>Status</span><strong className="status-text">{cleaned ? "Clear" : "Open"}</strong></div>
+            <div><span>Before</span><strong>{analysis.blockage}<small>% blocked</small></strong></div>
+            <div><span>After</span><strong>{verificationResult?.blockage ?? "—"}<small>{verificationResult ? "% blocked" : " awaiting photo"}</small></strong></div>
+            <div><span>Change</span><strong>{verificationResult ? (verificationResult.reduction > 0 ? `−${verificationResult.reduction}` : "0") : "—"}<small> points</small></strong></div>
+            <div><span>Status</span><strong className={`status-text ${verificationResult && !cleaned ? "needs-review" : ""}`}>{cleaned ? "Verified" : verificationResult ? "Review" : "Open"}</strong></div>
           </div>
         </div>
       </section>
@@ -627,7 +792,7 @@ export default function Home() {
             <pre>{report}</pre>
             <div className="modal-actions">
               <button className="button" onClick={copyReport}>{copied ? "✓ Copied" : "Copy brief"}</button>
-              <button className="button button-outline" onClick={() => { setReportOpen(false); setCleaned(true); }}>Mark dispatched</button>
+              <button className="button button-outline" onClick={() => setReportOpen(false)}>Close</button>
             </div>
           </section>
         </div>
