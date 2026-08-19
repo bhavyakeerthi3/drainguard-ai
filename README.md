@@ -1,8 +1,8 @@
 # DrainGuard AI
 
-> See a drain. Stop a flood.
+> Stop street waste before the next storm moves it downstream.
 
-DrainGuard AI is an explainable cleanup-prioritization system for storm drains. A field worker uploads a street photo, the app checks the visual evidence, combines blockage and litter signals with location-specific rainfall, and ranks the report for municipal action. A second photo is required to verify cleanup.
+DrainGuard AI is an AI-assisted environmental monitoring and cleanup-prioritization prototype. A field worker uploads a street photo, the app checks the visual evidence, combines blockage and litter signals with location-specific rainfall and mapped waterway context, and ranks the report for action. A second photo is required to verify cleanup.
 
 [Live demo](https://drainguard-ai-earth.vercel.app) · [Devpost submission notes](docs/DEVPOST.md) · [Architecture and evaluation](docs/ARCHITECTURE.md)
 
@@ -27,6 +27,10 @@ It is a prioritization aid, not a flood predictor or replacement for engineering
 - uses COCO-SSD only for visible litter objects, not as a drain model;
 - fetches rainfall for each report's latitude and longitude from Open-Meteo;
 - calculates a transparent priority score;
+- calculates a separate environmental decision-support estimate with explicit evidence coverage;
+- looks up nearby mapped rivers, streams, canals, and water bodies through OpenStreetMap / Overpass;
+- explains every factor and contribution behind the result;
+- explores dry, moderate, and heavy controlled rainfall scenarios without presenting them as forecasts;
 - places reports on an OpenStreetMap map and sorts them into a cleanup queue;
 - stores compressed before/after evidence on the inspection device;
 - requires a same-drain scene match and meaningful improvement before closing a report;
@@ -39,6 +43,17 @@ priority = 0.55 × blockage + 0.30 × rainfall index + 0.15 × litter
 ```
 
 The weights are intentionally visible in the product. They are pilot policy values, not scientifically validated flood probabilities.
+
+The environmental decision-support estimate is also centrally configured:
+
+```text
+environmental risk = 0.40 × blockage
+                   + 0.30 × rainfall index
+                   + 0.20 × litter
+                   + 0.10 × mapped waterway proximity
+```
+
+If waterway context cannot be retrieved, DrainGuard does not invent a value. It normalizes across available evidence, lowers evidence coverage, and exposes the limitation.
 
 ## AI and computer vision
 
@@ -73,6 +88,8 @@ flowchart LR
     C --> D["Explainable risk engine"]
     E["Coordinates"] --> F["Open-Meteo rainfall"]
     F --> D
+    E --> W["OSM / Overpass waterway context"]
+    W --> D
     D --> G["Ranked map and cleanup queue"]
     G --> H["After-cleanup photo"]
     H --> I["Same-drain fingerprint check"]
@@ -88,6 +105,7 @@ flowchart LR
 - TensorFlow.js with COCO-SSD
 - Leaflet and OpenStreetMap
 - Open-Meteo weather and geocoding APIs
+- OpenStreetMap Overpass environmental-context lookup
 - Nominatim address search
 - Vercel deployment
 - Node.js test runner and ESLint
@@ -111,6 +129,8 @@ No API keys are required for the current prototype.
 
 ```bash
 npm run lint
+npm run typecheck
+npm run test:scoring
 npm test
 npm audit
 ```
@@ -137,7 +157,9 @@ Photo analysis runs client-side. Reports and compressed evidence currently persi
 ## Project structure
 
 ```text
-app/                  Next.js interface, map, and analysis workflow
+app/                  Next.js interface, map, panels, and analysis workflow
+lib/scoring/          centralized priority, environmental, and scenario scoring
+lib/environment.ts    failure-tolerant waterway lookup
 lib/decisions.js      auditable verification thresholds
 public/               demo and social-preview assets
 tests/                build and decision-regression tests
@@ -146,7 +168,7 @@ docs/                 architecture and submission documentation
 
 ## Responsible use
 
-DrainGuard prioritizes visual inspections. Scores depend on image quality and forecast data. Emergency response, hydraulic modelling, and engineering decisions must remain with qualified authorities.
+DrainGuard prioritizes visual inspections. Environmental scores are decision-support estimates, not hydrological predictions or measurements of pollution volume. Scores depend on image quality, rainfall inputs, and available mapped context. Emergency response, hydraulic modelling, and engineering decisions must remain with qualified authorities.
 
 ## Data and service attribution
 

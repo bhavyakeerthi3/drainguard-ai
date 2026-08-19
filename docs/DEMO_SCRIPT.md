@@ -1,49 +1,37 @@
-# Two-minute demo script
+# 90-second hackathon demo script
 
-## 0:00–0:12 — Hook
+## 0:00–0:10 — Hook
 
-**Screen:** A blocked drain or the DrainGuard hero section.
+**Screen:** DrainGuard hero and environmental pathway.
 
-> One blocked drain can flood an entire street, but municipal teams cannot inspect every drain before heavy rain. They need to know which drain to clean first.
+> Street litter does not stay on the street. When a drain is blocked, rainfall can move visible waste toward waterways. DrainGuard helps teams decide where to act first.
 
-## 0:12–0:25 — Solution
+## 0:10–0:27 — Inspect
 
-**Screen:** Open DrainGuard AI.
+**Screen:** Select “Heavy blockage + litter” in Demo Mode, then show the photo result.
 
-> DrainGuard AI turns street photos into explainable cleanup priorities and verifies the work with before-and-after evidence.
+> A field worker uploads one photo. DrainGuard checks for drain-like evidence, estimates visible obstruction, and uses COCO-SSD only for visible litter—not as a drain model.
 
-## 0:25–0:47 — Inspect
+## 0:27–0:44 — Explain and explore
 
-**Screen:** Upload a blocked-drain photo and show the result.
+**Screen:** Show “Why this priority?” and apply the heavy-rain scenario.
 
-> A field worker uploads a photo. DrainGuard first checks whether the image contains credible drain evidence. It estimates visible obstruction and uses on-device object detection only for litter. Uncertain or unrelated photos go to human review.
+> Every score is explainable. Cleanup priority combines blockage, rainfall, and litter. A separate environmental estimate adds mapped waterway proximity. If that context is unavailable, the app says so and lowers evidence coverage. The scenario explorer shows sensitivity; it does not predict flooding.
 
-## 0:47–1:05 — Explain the score
+## 0:44–0:58 — Map and dashboard
 
-**Screen:** Point to obstruction, rainfall, litter and the score.
+**Screen:** Show the environmental risk map and Demo preview dashboard.
 
-> The result is not a black box. The priority formula weights blockage at 55 percent, local rainfall at 30 percent and litter at 15 percent. Weather is fetched using this report's coordinates.
+> Reports are ranked highest priority first. Map symbols show environmental concern, cleanup status, and human review without relying only on color. The dashboard uses stored reports and clearly labels sample data.
 
-## 1:05–1:22 — Prioritize
+## 0:58–1:16 — Verify
 
-**Screen:** Add a location, show the map and scroll through the queue.
+**Screen:** Show before/after verification and its four checks.
 
-> Every report appears on the map and enters one ranked cleanup queue. Crews see the highest-risk inlet first—not simply the newest complaint.
+> Cleanup is not complete until evidence passes. DrainGuard checks the same scene, drain confidence, obstruction improvement, and residual litter. Any failed check explains exactly why a person must review it.
 
-## 1:22–1:44 — Verify
+## 1:16–1:30 — Validation and close
 
-**Screen:** Upload an after-cleanup photo, then demonstrate a mismatched image.
+**Screen:** Validation & Limitations.
 
-> After cleanup, the crew uploads a second photo. DrainGuard checks that it appears to show the same drain. The ticket closes only when the scene matches and visible obstruction falls enough. A different photo stays open for human review.
-
-## 1:44–1:54 — Evidence
-
-**Screen:** Show the evaluation panel.
-
-> Our executable regression suite covers blocked, clear, unchanged, wrong-scene and non-drain decisions. All 12 current workflow cases pass, while field accuracy remains clearly separated from prototype testing.
-
-## 1:54–2:00 — Close
-
-**Screen:** Return to the hero or map.
-
-> DrainGuard does not predict floods. It helps cities act before flooding begins: inspect, prioritize, clean and prove. DrainGuard AI—see a drain, stop a flood.
+> Automated tests cover scoring, rainfall sensitivity, missing environmental context, scene mismatches, and review routing. Field accuracy still needs a labelled dataset. DrainGuard is honest decision support: detect, prioritize, act, and verify before waste moves downstream.

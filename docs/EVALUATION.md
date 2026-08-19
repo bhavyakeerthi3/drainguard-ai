@@ -29,6 +29,23 @@ Run the suite with:
 npm test
 ```
 
+## Environmental scoring checks
+
+The separate scoring suite executes the same centralized TypeScript functions used by the interface. It checks:
+
+- priority and environmental weights sum to 100%;
+- exact factor contributions remain explainable;
+- mapped waterway proximity contributes only when data is available;
+- unavailable context remains `null`, reduces evidence coverage, and is never fabricated as low risk;
+- the published 250 m and 750 m proximity thresholds behave at their boundaries;
+- cleanup priority increases monotonically across controlled dry, moderate, and heavy rainfall inputs.
+
+Run these checks with:
+
+```bash
+npm run test:scoring
+```
+
 ## Manual browser checks
 
 The current production release has also been manually checked for:
@@ -40,7 +57,7 @@ The current production release has also been manually checked for:
 
 ## What these results do not establish
 
-The twelve fixtures are policy-regression cases. They do not establish model accuracy, generalization, or real-world flood reduction. They must not be reported as precision, recall, or detection accuracy.
+The fixtures are policy-regression cases. They do not establish model accuracy, environmental-risk calibration, generalization, pollution volume, or real-world flood reduction. They must not be reported as precision, recall, detection accuracy, or environmental impact avoided.
 
 ## Field-evaluation plan
 
