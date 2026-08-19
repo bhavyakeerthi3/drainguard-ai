@@ -7,7 +7,7 @@ test("produces a deployable Next.js build", async () => {
   await access(new URL("../.next/BUILD_ID", import.meta.url));
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /DrainGuard/);
-  assert.match(page, /Find the drain/);
+  assert.match(page, /Stop street waste/);
   assert.match(page, /Photo in\. Priority out\./);
   assert.doesNotMatch(page, /codex-preview|Your site is taking shape/);
 });
@@ -15,12 +15,13 @@ test("produces a deployable Next.js build", async () => {
 test("ships the explainable risk model and responsible-use language", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const layout = await readFile(new URL("../app/layout.tsx", import.meta.url), "utf8");
-  assert.match(page, /blockage \* 0\.55/);
-  assert.match(page, /rainfallIndex \* 0\.3/);
-  assert.match(page, /litter \* 0\.15/);
+  const config = await readFile(new URL("../lib/scoring/config.ts", import.meta.url), "utf8");
+  assert.match(config, /blockage: 0\.55/);
+  assert.match(config, /rainfall: 0\.3/);
+  assert.match(config, /litter: 0\.15/);
   assert.match(page, /does not predict floods/i);
   assert.match(page, /COCO-SSD/);
-  assert.match(layout, /See a drain\. Stop a flood\./);
+  assert.match(layout, /Stop street waste before the next storm moves it downstream\./);
 });
 
 test("connects location search to a real garbage-risk map", async () => {
@@ -66,7 +67,7 @@ test("passes all 12 documented decision regression cases", () => {
 
 test("ships the final pilot safeguards and evidence surfaces", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /drainguard-pilot-v1/);
+  assert.match(page, /drainguard-pilot:v2/);
   assert.match(page, /localStorage\.setItem/);
   assert.match(page, /latitude=\$\{selectedSite\.lat\}/);
   assert.match(page, /Human review/);
@@ -76,4 +77,19 @@ test("ships the final pilot safeguards and evidence surfaces", async () => {
   assert.match(page, /Different-scene after photos/);
   assert.match(page, /Drain not confirmed · human review/);
   assert.match(page, /workflow logic—not field accuracy/);
+});
+
+test("ships the environmental decision-support experience", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const panels = await readFile(new URL("../app/EnvironmentalPanels.tsx", import.meta.url), "utf8");
+  const environment = await readFile(new URL("../lib/environment.ts", import.meta.url), "utf8");
+  assert.match(page, /EnvironmentalDashboard/);
+  assert.match(page, /PriorityExplanation/);
+  assert.match(page, /RainfallScenarioExplorer/);
+  assert.match(page, /DemoMode/);
+  assert.match(panels, /Environmental decision-support estimate/);
+  assert.match(panels, /Sample data for demonstration/);
+  assert.match(panels, /Still requires field validation/);
+  assert.match(environment, /overpass-api\.de\/api\/interpreter/);
+  assert.match(environment, /Environmental context unavailable/);
 });

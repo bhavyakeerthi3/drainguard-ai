@@ -12,16 +12,33 @@ export type MapSite = {
   lon: number;
   rainfall?: number;
   weatherStatus?: string;
+  blockage?: number;
+  litter?: number;
+  environmentalRisk?: number;
+  environmentalLevel?: string;
+  environmentalContext?: string;
+  environmentalDistanceMeters?: number | null;
+  recommendedAction?: string;
+  photo?: string;
+  isDemo?: boolean;
 };
 
 type LeafletModule = typeof import("leaflet");
 
 function markerColor(site: MapSite) {
   if (site.status === "Verified clear") return "#dfff68";
-  if (site.risk >= 80) return "#ff745f";
-  if (site.risk >= 60) return "#f5bd4e";
-  if (site.risk >= 40) return "#89c9c0";
+  const concern = site.environmentalRisk ?? site.risk;
+  if (concern >= 80) return "#ff745f";
+  if (concern >= 60) return "#f5bd4e";
+  if (concern >= 40) return "#89c9c0";
   return "#dfff68";
+}
+
+function markerSymbol(site: MapSite) {
+  if (site.status === "Verified clear") return "✓";
+  if (site.status === "Needs review") return "!";
+  if ((site.environmentalRisk ?? site.risk) >= 60) return "▲";
+  return "●";
 }
 
 export function DrainMap({
@@ -94,7 +111,8 @@ export function DrainMap({
         fillColor: markerColor(site),
         fillOpacity: 1,
       });
-      marker.bindTooltip(String(site.risk), {
+      const environmentalRisk = site.environmentalRisk ?? site.risk;
+      marker.bindTooltip(`${markerSymbol(site)} ${environmentalRisk}`, {
         permanent: true,
         direction: "center",
         className: "garbage-risk-tooltip",
@@ -103,11 +121,27 @@ export function DrainMap({
       const identifier = document.createElement("strong");
       identifier.textContent = site.id;
       popup.append(identifier, document.createElement("br"));
+      if (site.photo) {
+        const photo = document.createElement("img");
+        photo.src = site.photo;
+        photo.alt = `Inspection evidence for ${site.id}`;
+        photo.width = 220;
+        photo.height = 120;
+        photo.className = "map-popup-photo";
+        popup.append(photo);
+      }
       popup.append(document.createTextNode(site.place), document.createElement("br"));
-      popup.append(document.createTextNode(`Risk ${site.risk}/100`));
+      popup.append(document.createTextNode(`Cleanup priority ${site.risk}/100`), document.createElement("br"));
+      popup.append(document.createTextNode(`Environmental concern ${environmentalRisk}/100`), document.createElement("br"));
+      popup.append(document.createTextNode(`Blockage ${site.blockage ?? "—"}/100 · litter ${site.litter ?? "—"}/100`), document.createElement("br"));
+      popup.append(document.createTextNode(`Rainfall ${site.rainfall?.toFixed(1) ?? "—"} mm`), document.createElement("br"));
+      popup.append(document.createTextNode(site.environmentalContext ?? "Environmental context unavailable"), document.createElement("br"));
+      popup.append(document.createTextNode(`Status: ${site.status}`), document.createElement("br"));
+      popup.append(document.createTextNode(site.recommendedAction ?? "Open the report for the recommended action."));
       marker.bindPopup(popup);
       marker.on("click", () => onSelectRef.current(site));
       marker.addTo(markerLayer);
+      marker.getElement()?.setAttribute("aria-label", `${site.id}, ${site.place}, environmental concern ${environmentalRisk} out of 100, ${site.status}`);
     }
 
     const selected = sites.find((site) => site.id === selectedId);
@@ -118,9 +152,10 @@ export function DrainMap({
     <div className="map-live-wrap">
       <div ref={containerRef} className="real-map" aria-label="OpenStreetMap showing reported garbage locations" />
       <div className="map-key">
-        <span><i className="key-critical" /> Critical</span>
-        <span><i className="key-watch" /> Watch</span>
-        <span><i className="key-low" /> Clear</span>
+        <span><i className="key-critical" /> ▲ High concern</span>
+        <span><i className="key-watch" /> ● Moderate</span>
+        <span><i className="key-low" /> ✓ Verified</span>
+        <span><i className="key-review" /> ! Review</span>
       </div>
     </div>
   );

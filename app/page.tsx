@@ -3,7 +3,21 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import NextImage from "next/image";
 import { DrainMap, type MapSite } from "./DrainMap";
+import {
+  DemoMode,
+  EnvironmentalDashboard,
+  PriorityExplanation,
+  RainfallScenarioExplorer,
+  ValidationPanel,
+  VerificationChecklist,
+  type DemoScenario,
+  type VerificationCheck,
+} from "./EnvironmentalPanels";
 import { inspectionDecision, passesCleanupVerification, priorityAction, SAME_DRAIN_THRESHOLD } from "../lib/decisions.js";
+import { fetchWaterwayContext } from "../lib/environment.ts";
+import { calculateEnvironmentalRisk, type WaterwayContext } from "../lib/scoring/environmentalRisk.ts";
+import { calculatePriorityScore, recommendedAction, scoreLevel } from "../lib/scoring/priority.ts";
+import { calculateRainfallScenarios } from "../lib/scoring/rainfallScenarios.ts";
 
 type Detection = {
   class: string;
@@ -39,7 +53,7 @@ type EvidenceRecord = {
 };
 
 type PersistedPilot = {
-  version: 1;
+  version: 2;
   sites: MapSite[];
   evidence: Record<string, EvidenceRecord>;
 };
@@ -67,13 +81,31 @@ const SAMPLE_ANALYSIS: Analysis = {
 };
 
 const INITIAL_SITES: MapSite[] = [
-  { id: "DG-104", place: "5th Cross · Koramangala", risk: 84, status: "Dispatch now", lat: 12.9352, lon: 77.6245, rainfall: 18 },
-  { id: "DG-098", place: "Market Road · Shantinagar", risk: 76, status: "Inspect today", lat: 12.9536, lon: 77.5937, rainfall: 18 },
-  { id: "DG-091", place: "1st Main · Indiranagar", risk: 61, status: "Needs review", lat: 12.9784, lon: 77.6408, rainfall: 18 },
-  { id: "DG-087", place: "8th Block · Jayanagar", risk: 35, status: "Verified clear", lat: 12.925, lon: 77.5938, rainfall: 18 },
+  { id: "DG-104", place: "5th Cross · Koramangala", risk: 84, environmentalRisk: 87, environmentalLevel: "critical", environmentalDistanceMeters: 180, environmentalContext: "Demo: mapped stream approximately 180 m away", status: "Dispatch now", lat: 12.9352, lon: 77.6245, rainfall: 18, blockage: 82, litter: 62, recommendedAction: "Inspect and clean as soon as operationally practical.", photo: "/demo-drain.jpg", isDemo: true },
+  { id: "DG-098", place: "Market Road · Shantinagar", risk: 76, environmentalRisk: 73, environmentalLevel: "high", environmentalDistanceMeters: 520, environmentalContext: "Demo: mapped canal approximately 520 m away", status: "Inspect today", lat: 12.9536, lon: 77.5937, rainfall: 18, blockage: 68, litter: 58, recommendedAction: "Schedule inspection and cleanup within 24 hours.", photo: "/demo-drain.jpg", isDemo: true },
+  { id: "DG-091", place: "1st Main · Indiranagar", risk: 61, environmentalRisk: 58, environmentalLevel: "moderate", environmentalDistanceMeters: null, environmentalContext: "Demo: environmental context unavailable", status: "Needs review", lat: 12.9784, lon: 77.6408, rainfall: 18, blockage: 56, litter: 44, recommendedAction: "Human review required before dispatch.", photo: "/demo-drain.jpg", isDemo: true },
+  { id: "DG-087", place: "8th Block · Jayanagar", risk: 35, environmentalRisk: 31, environmentalLevel: "low", environmentalDistanceMeters: 1100, environmentalContext: "Demo: nearest mapped water feature approximately 1.1 km away", status: "Verified clear", lat: 12.925, lon: 77.5938, rainfall: 18, blockage: 28, litter: 22, recommendedAction: "Cleanup verified. Continue routine monitoring.", photo: "/demo-drain.jpg", isDemo: true },
 ];
 
-const PILOT_STORAGE_KEY = "drainguard-pilot-v1";
+const PILOT_STORAGE_KEY = "drainguard-pilot:v2";
+const LEGACY_STORAGE_KEY = "drainguard-pilot-v1";
+
+const DEMO_SCENARIOS: DemoScenario[] = [
+  { id: "clear", title: "Low-risk clear drain", description: "Low blockage and little visible litter.", blockage: 22, litter: 16, rainfallMm: 2, status: "Monitor", environmentalDistanceMeters: 1200 },
+  { id: "moderate", title: "Moderate blockage", description: "Visible obstruction needs routine inspection.", blockage: 52, litter: 38, rainfallMm: 8, status: "Monitor", environmentalDistanceMeters: 680 },
+  { id: "litter", title: "Heavy blockage + litter", description: "Strong visible evidence raises cleanup urgency.", blockage: 88, litter: 84, rainfallMm: 6, status: "Dispatch now", environmentalDistanceMeters: 880 },
+  { id: "rainfall", title: "Heavy blockage + rainfall", description: "The same evidence under a heavy-rain scenario.", blockage: 84, litter: 58, rainfallMm: 64, status: "Dispatch now", environmentalDistanceMeters: 820 },
+  { id: "waterway", title: "Near mapped waterway", description: "High concern with mapped environmental context.", blockage: 78, litter: 72, rainfallMm: 28, status: "Dispatch now", environmentalDistanceMeters: 140 },
+  { id: "verified", title: "Verified cleanup", description: "A successful same-scene before/after decision.", blockage: 28, litter: 24, rainfallMm: 12, status: "Verified clear", environmentalDistanceMeters: 420 },
+  { id: "review", title: "Human review required", description: "Uncertain evidence remains open for a person.", blockage: 67, litter: 51, rainfallMm: 18, status: "Needs review", environmentalDistanceMeters: null },
+];
+
+const UNAVAILABLE_WATERWAY: WaterwayContext = {
+  status: "unavailable",
+  distanceMeters: null,
+  source: "OpenStreetMap / Overpass",
+  message: "Environmental context unavailable. No proximity value was fabricated.",
+};
 
 let detectorPromise: Promise<Detector> | null = null;
 
@@ -272,15 +304,27 @@ function compareSceneFingerprints(before: number[], after: number[]) {
 }
 
 function scoreRisk(blockage: number, litter: number, rain: number) {
-  const rainfallIndex = clamp((rain / 64) * 100);
-  return Math.round(blockage * 0.55 + rainfallIndex * 0.3 + litter * 0.15);
+  return calculatePriorityScore({ blockage, litter, rainfallMm: rain }).score;
 }
 
 function riskBand(risk: number) {
-  if (risk >= 80) return { label: "Critical", tone: "critical" };
-  if (risk >= 60) return { label: "High", tone: "high" };
-  if (risk >= 40) return { label: "Watch", tone: "watch" };
+  const level = scoreLevel(risk);
+  if (level === "critical") return { label: "Critical", tone: "critical" };
+  if (level === "high") return { label: "High", tone: "high" };
+  if (level === "moderate") return { label: "Watch", tone: "watch" };
   return { label: "Low", tone: "low" };
+}
+
+function waterwayContextForSite(site: MapSite): WaterwayContext {
+  if (typeof site.environmentalDistanceMeters === "number") {
+    return {
+      status: "available",
+      distanceMeters: site.environmentalDistanceMeters,
+      source: "OpenStreetMap / Overpass",
+      message: site.environmentalContext ?? `Mapped water feature approximately ${site.environmentalDistanceMeters} m away.`,
+    };
+  }
+  return UNAVAILABLE_WATERWAY;
 }
 
 export default function Home() {
@@ -288,7 +332,9 @@ export default function Home() {
   const [fileName, setFileName] = useState("EGLE stormwater sample");
   const [analysis, setAnalysis] = useState<Analysis>(SAMPLE_ANALYSIS);
   const [mode, setMode] = useState<"surge" | "live">("live");
+  const [scenarioRainfall, setScenarioRainfall] = useState(64);
   const [weatherStatus, setWeatherStatus] = useState("Loading location forecast");
+  const [waterwayContext, setWaterwayContext] = useState<WaterwayContext>(() => waterwayContextForSite(INITIAL_SITES[0]));
   const [stage, setStage] = useState<"idle" | "loading" | "detecting" | "done">("idle");
   const [sites, setSites] = useState<MapSite[]>(INITIAL_SITES);
   const [selectedSite, setSelectedSite] = useState<MapSite>(INITIAL_SITES[0]);
@@ -308,12 +354,57 @@ export default function Home() {
   const verificationInput = useRef<HTMLInputElement>(null);
   const nextLocationId = useRef(105);
 
-  const rainfall = mode === "surge" ? 64 : (selectedSite.rainfall ?? 18);
+  const rainfall = mode === "surge" ? scenarioRainfall : (selectedSite.rainfall ?? 18);
   const effectiveAnalysis = cleaned && verificationResult ? verificationResult : analysis;
-  const risk = scoreRisk(effectiveAnalysis.blockage, effectiveAnalysis.litter, rainfall);
+  const priorityResult = useMemo(() => calculatePriorityScore({
+    blockage: effectiveAnalysis.blockage,
+    litter: effectiveAnalysis.litter,
+    rainfallMm: rainfall,
+    evidenceConfidence: effectiveAnalysis.confidence,
+  }), [effectiveAnalysis.blockage, effectiveAnalysis.confidence, effectiveAnalysis.litter, rainfall]);
+  const environmentalResult = useMemo(() => calculateEnvironmentalRisk({
+    blockage: effectiveAnalysis.blockage,
+    litter: effectiveAnalysis.litter,
+    rainfallMm: rainfall,
+    waterway: waterwayContext,
+    evidenceConfidence: effectiveAnalysis.confidence,
+  }), [effectiveAnalysis.blockage, effectiveAnalysis.confidence, effectiveAnalysis.litter, rainfall, waterwayContext]);
+  const scenarios = useMemo(() => calculateRainfallScenarios({
+    blockage: effectiveAnalysis.blockage,
+    litter: effectiveAnalysis.litter,
+    waterway: waterwayContext,
+    evidenceConfidence: effectiveAnalysis.confidence,
+  }), [effectiveAnalysis.blockage, effectiveAnalysis.confidence, effectiveAnalysis.litter, waterwayContext]);
+  const risk = priorityResult.score;
   const band = riskBand(risk);
   const sortedSites = useMemo(() => [...sites].sort((a, b) => b.risk - a.risk), [sites]);
   const reviewSites = useMemo(() => sites.filter((site) => site.status === "Needs review"), [sites]);
+  const dashboardRecords = useMemo(() => sites.map((site) => ({
+    ...site,
+    verifiedReduction: evidenceBySite[site.id]?.verification?.verified
+      ? evidenceBySite[site.id].verification?.reduction
+      : undefined,
+  })), [evidenceBySite, sites]);
+  const verificationChecks = useMemo<VerificationCheck[]>(() => {
+    if (!verificationResult) {
+      return [
+        { label: "Same scene confidence", detail: "Waiting for an after photo.", state: "waiting" },
+        { label: "Drain evidence", detail: "Waiting for an after photo.", state: "waiting" },
+        { label: "Obstruction improved", detail: "Requires at least a 15-point reduction.", state: "waiting" },
+        { label: "Litter threshold", detail: "Residual litter must be 48 or lower.", state: "waiting" },
+      ];
+    }
+    return [
+      { label: "Same scene confidence", detail: `${verificationResult.sceneMatch}% match; ${SAME_DRAIN_THRESHOLD}% required.`, state: verificationResult.sameDrain ? "pass" : "fail" },
+      { label: "Drain evidence", detail: `${verificationResult.drainConfidence ?? 0}% confidence; 60% required.`, state: (verificationResult.drainConfidence ?? 0) >= 60 ? "pass" : "fail" },
+      { label: "Obstruction improved", detail: `${verificationResult.reduction}-point reduction; 15 required.`, state: verificationResult.reduction >= 15 ? "pass" : "fail" },
+      { label: "Litter threshold", detail: `${verificationResult.litter}/100 residual litter; maximum 48.`, state: verificationResult.litter <= 48 ? "pass" : "fail" },
+    ];
+  }, [verificationResult]);
+  const verificationFailureReason = verificationChecks
+    .filter((check) => check.state === "fail")
+    .map((check) => `${check.label}: ${check.detail}`)
+    .join(" ");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -349,13 +440,62 @@ export default function Home() {
     return () => controller.abort();
   }, [effectiveAnalysis.blockage, effectiveAnalysis.litter, selectedSite.id, selectedSite.lat, selectedSite.lon, selectedSite.place]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    const targetSiteId = selectedSite.id;
+
+    async function loadEnvironmentalContext() {
+      const context = selectedSite.isDemo
+        ? (typeof selectedSite.environmentalDistanceMeters === "number" ? {
+          status: "available" as const,
+          distanceMeters: selectedSite.environmentalDistanceMeters,
+          source: "OpenStreetMap / Overpass" as const,
+          message: selectedSite.environmentalContext ?? `Demo scenario: mapped water feature approximately ${selectedSite.environmentalDistanceMeters} m away.`,
+        } : UNAVAILABLE_WATERWAY)
+        : await fetchWaterwayContext(selectedSite.lat, selectedSite.lon, controller.signal);
+      if (controller.signal.aborted) return;
+      setWaterwayContext(context);
+      const environmental = calculateEnvironmentalRisk({
+        blockage: effectiveAnalysis.blockage,
+        litter: effectiveAnalysis.litter,
+        rainfallMm: rainfall,
+        waterway: context,
+        evidenceConfidence: effectiveAnalysis.confidence,
+      });
+      const action = recommendedAction(scoreRisk(effectiveAnalysis.blockage, effectiveAnalysis.litter, rainfall), cleaned);
+      setSites((current) => current.map((site) => site.id === targetSiteId ? {
+        ...site,
+        blockage: effectiveAnalysis.blockage,
+        litter: effectiveAnalysis.litter,
+        environmentalRisk: environmental.score,
+        environmentalLevel: environmental.level,
+        environmentalContext: context.message,
+        environmentalDistanceMeters: context.distanceMeters,
+        recommendedAction: action,
+      } : site));
+      setSelectedSite((current) => current.id === targetSiteId ? {
+        ...current,
+        blockage: effectiveAnalysis.blockage,
+        litter: effectiveAnalysis.litter,
+        environmentalRisk: environmental.score,
+        environmentalLevel: environmental.level,
+        environmentalContext: context.message,
+        environmentalDistanceMeters: context.distanceMeters,
+        recommendedAction: action,
+      } : current);
+    }
+
+    void loadEnvironmentalContext();
+    return () => controller.abort();
+  }, [cleaned, effectiveAnalysis.blockage, effectiveAnalysis.confidence, effectiveAnalysis.litter, rainfall, selectedSite.environmentalContext, selectedSite.environmentalDistanceMeters, selectedSite.id, selectedSite.isDemo, selectedSite.lat, selectedSite.lon]);
+
   /* eslint-disable react-hooks/set-state-in-effect -- Hydrate the device-persistent pilot after the client mounts. */
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(PILOT_STORAGE_KEY);
+      const raw = window.localStorage.getItem(PILOT_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
       if (raw) {
-        const saved = JSON.parse(raw) as PersistedPilot;
-        if (saved.version === 1 && saved.sites.length > 0) {
+        const saved = JSON.parse(raw) as { version: number; sites: MapSite[]; evidence?: Record<string, EvidenceRecord> };
+        if ([1, 2].includes(saved.version) && saved.sites.length > 0) {
           setSites(saved.sites);
           setEvidenceBySite(saved.evidence ?? {});
           const first = saved.sites[0];
@@ -376,6 +516,7 @@ export default function Home() {
       }
     } catch {
       window.localStorage.removeItem(PILOT_STORAGE_KEY);
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
     } finally {
       setPersistenceReady(true);
     }
@@ -383,9 +524,10 @@ export default function Home() {
 
   useEffect(() => {
     if (!persistenceReady) return;
-    const payload: PersistedPilot = { version: 1, sites, evidence: evidenceBySite };
+    const payload: PersistedPilot = { version: 2, sites, evidence: evidenceBySite };
     try {
       window.localStorage.setItem(PILOT_STORAGE_KEY, JSON.stringify(payload));
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
       // Storage can be full or disabled; the live session remains usable.
     }
@@ -408,6 +550,12 @@ export default function Home() {
     const record = suppliedRecord ?? evidenceBySite[site.id];
     setSelectedSite(site);
     setWeatherStatus(site.weatherStatus ?? `Loading forecast · ${site.place}`);
+    setWaterwayContext(site.isDemo ? waterwayContextForSite(site) : {
+      status: "loading",
+      distanceMeters: null,
+      source: "OpenStreetMap / Overpass",
+      message: "Checking mapped waterways near this report…",
+    });
     if (record) {
       setImageUrl(record.beforeImage);
       setFileName(record.beforeName);
@@ -550,10 +698,10 @@ export default function Home() {
       if (verified) {
         const residualRisk = scoreRisk(blockage, litter, rainfall);
         setSites((current) => current.map((site) => (
-          site.id === targetSiteId ? { ...site, risk: residualRisk, status: "Verified clear" } : site
+          site.id === targetSiteId ? { ...site, risk: residualRisk, status: "Verified clear", blockage, litter, photo: source, recommendedAction: recommendedAction(residualRisk, true) } : site
         )));
         setSelectedSite((current) => (
-          current.id === targetSiteId ? { ...current, risk: residualRisk, status: "Verified clear" } : current
+          current.id === targetSiteId ? { ...current, risk: residualRisk, status: "Verified clear", blockage, litter, photo: source, recommendedAction: recommendedAction(residualRisk, true) } : current
         ));
       } else {
         const originalRisk = scoreRisk(analysis.blockage, analysis.litter, rainfall);
@@ -682,10 +830,10 @@ export default function Home() {
       }));
       const resultRisk = scoreRisk(blockage, litter, rainfall);
       setSites((current) => current.map((site) => (
-        site.id === targetSiteId ? { ...site, risk: resultRisk, status: nextStatus } : site
+        site.id === targetSiteId ? { ...site, risk: resultRisk, status: nextStatus, blockage, litter, photo: source, recommendedAction: recommendedAction(resultRisk) } : site
       )));
       setSelectedSite((current) => (
-        current.id === targetSiteId ? { ...current, risk: resultRisk, status: nextStatus } : current
+        current.id === targetSiteId ? { ...current, risk: resultRisk, status: nextStatus, blockage, litter, photo: source, recommendedAction: recommendedAction(resultRisk) } : current
       ));
       setStage("done");
     } catch {
@@ -752,6 +900,15 @@ export default function Home() {
         lon: result.lon,
         rainfall,
         weatherStatus,
+        blockage: analysis.blockage,
+        litter: analysis.litter,
+        environmentalRisk: environmentalResult.score,
+        environmentalLevel: environmentalResult.level,
+        environmentalContext: "Checking mapped waterways near this report…",
+        environmentalDistanceMeters: null,
+        recommendedAction: recommendedAction(risk),
+        photo: imageUrl,
+        isDemo: false,
       };
       const evidence: EvidenceRecord = {
         beforeImage: imageUrl,
@@ -786,6 +943,8 @@ export default function Home() {
     setFileName("EGLE stormwater sample");
     setAnalysis(SAMPLE_ANALYSIS);
     setMode("surge");
+    setScenarioRainfall(64);
+    setWaterwayContext(waterwayContextForSite(INITIAL_SITES[0]));
     setVerificationImageUrl(null);
     setVerificationFileName("");
     setVerificationResult(null);
@@ -794,7 +953,73 @@ export default function Home() {
     setStage("idle");
   }
 
-  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nPriority: ${band.label.toUpperCase()} (${risk}/100)\nLocation: ${selectedSite.place}\nObserved blockage: ${effectiveAnalysis.blockage}%\nLitter signal: ${effectiveAnalysis.litter}%\nVerification: ${cleaned ? `Passed · ${verificationResult?.reduction ?? 0} point obstruction reduction` : "Pending field evidence"}\nRain scenario: ${rainfall.toFixed(1)} mm / 24h\n\nRecommended action: ${cleaned ? "Cleanup verified from the after photo. Continue routine monitoring." : risk >= 80 ? "Dispatch a cleanup crew before the next rainfall window. Photograph the cleared inlet to close the task." : risk >= 60 ? "Inspect and clear within 24 hours." : "Monitor and re-check after rainfall."}\n\nThis is a prioritization aid, not a flood prediction or emergency alert.`;
+  function applyRainfallScenario(rainfallMm: number) {
+    setScenarioRainfall(rainfallMm);
+    setMode("surge");
+  }
+
+  function loadDemoScenario(scenario: DemoScenario) {
+    const demoWaterway: WaterwayContext = scenario.environmentalDistanceMeters === null
+      ? UNAVAILABLE_WATERWAY
+      : {
+        status: "available",
+        distanceMeters: scenario.environmentalDistanceMeters,
+        source: "OpenStreetMap / Overpass",
+        message: `Demo scenario: mapped water feature approximately ${scenario.environmentalDistanceMeters} m away.`,
+      };
+    const demoAnalysis: Analysis = {
+      ...SAMPLE_ANALYSIS,
+      blockage: scenario.blockage,
+      litter: scenario.litter,
+      confidence: scenario.id === "review" ? 55 : 88,
+      drainConfidence: scenario.id === "review" ? 55 : 86,
+      signal: "Demo scenario · controlled evidence",
+    };
+    const demoPriority = calculatePriorityScore({
+      blockage: scenario.blockage,
+      litter: scenario.litter,
+      rainfallMm: scenario.rainfallMm,
+      evidenceConfidence: demoAnalysis.confidence,
+    });
+    const demoEnvironmental = calculateEnvironmentalRisk({
+      blockage: scenario.blockage,
+      litter: scenario.litter,
+      rainfallMm: scenario.rainfallMm,
+      waterway: demoWaterway,
+      evidenceConfidence: demoAnalysis.confidence,
+    });
+    const demoSite: MapSite = {
+      ...INITIAL_SITES[0],
+      id: `DEMO-${scenario.id.toUpperCase()}`,
+      place: `${scenario.title} · Demo scenario`,
+      risk: demoPriority.score,
+      status: scenario.status,
+      rainfall: scenario.rainfallMm,
+      blockage: scenario.blockage,
+      litter: scenario.litter,
+      environmentalRisk: demoEnvironmental.score,
+      environmentalLevel: demoEnvironmental.level,
+      environmentalContext: demoWaterway.message,
+      environmentalDistanceMeters: demoWaterway.distanceMeters,
+      recommendedAction: recommendedAction(demoPriority.score, scenario.status === "Verified clear"),
+      isDemo: true,
+    };
+    setAnalysis(demoAnalysis);
+    setSelectedSite(demoSite);
+    setSites((current) => [demoSite, ...current.filter((site) => !site.id.startsWith("DEMO-"))]);
+    setWaterwayContext(demoWaterway);
+    setScenarioRainfall(scenario.rainfallMm);
+    setMode("surge");
+    setImageUrl("/demo-drain.jpg");
+    setFileName(`${scenario.title} · sample data`);
+    setVerificationImageUrl(null);
+    setVerificationResult(null);
+    setVerificationStage("idle");
+    setCleaned(scenario.status === "Verified clear");
+    window.requestAnimationFrame(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }));
+  }
+
+  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nCleanup priority: ${band.label.toUpperCase()} (${risk}/100)\nEnvironmental impact risk: ${environmentalResult.score}/100 (${environmentalResult.confidence} confidence · ${environmentalResult.coverage}% coverage)\nLocation: ${selectedSite.place}\nObserved blockage: ${effectiveAnalysis.blockage}%\nLitter signal: ${effectiveAnalysis.litter}%\nEnvironmental context: ${waterwayContext.message}\nVerification: ${cleaned ? `Passed · ${verificationResult?.reduction ?? 0} point obstruction reduction` : "Pending field evidence"}\nRainfall input: ${rainfall.toFixed(1)} mm / 24h\n\nRecommended action: ${recommendedAction(risk, cleaned)}\n\nDecision-support estimate only. This is not a flood prediction, hydrological model, pollution-volume estimate, or emergency alert.`;
 
   async function copyReport() {
     await navigator.clipboard.writeText(report);
@@ -809,34 +1034,36 @@ export default function Home() {
           <span className="brand-mark">DG</span>
           <span>DrainGuard <i>AI</i></span>
         </a>
-        <div className="pilot-pill"><span /> Bengaluru pilot · Live</div>
+        <div className="pilot-pill"><span /> Environmental decision-support prototype</div>
         <nav aria-label="Primary navigation">
           <a href="#inspect">Inspect</a>
-          <a href="#queue">Priority map</a>
-          <a href="#method">Method</a>
+          <a href="#dashboard">Impact dashboard</a>
+          <a href="#queue">Risk map</a>
+          <a href="#method">Validation</a>
         </nav>
         <button className="button button-small" onClick={() => fileInput.current?.click()}>+ New inspection</button>
       </header>
 
       <section className="hero" id="top">
         <div className="hero-copy">
-          <div className="eyebrow"><span>Monsoon readiness</span><span>Ward 151</span></div>
-          <h1>Find the drain<br />that fails <em>next.</em></h1>
-          <p>Turn one street photo into an explainable cleanup priority—before rain turns litter into flooding and waterway pollution.</p>
+          <div className="eyebrow"><span>Street-to-waterway monitoring</span><span>Decision support</span></div>
+          <h1>Stop street waste before the next storm moves it <em>downstream.</em></h1>
+          <p>DrainGuard AI helps communities identify blocked, litter-filled storm drains, prioritize inspection using visible evidence and rainfall context, and verify cleanup with before-and-after evidence.</p>
           <div className="hero-actions">
             <a className="button" href="#inspect">Run an inspection <span>→</span></a>
-            <button className="text-button" onClick={restoreSample}>Watch sample analysis <span>↘</span></button>
+            <a className="text-button" href="#demo">Open two-minute demo <span>↘</span></a>
           </div>
         </div>
-        <div className="hero-proof" aria-label="Pilot impact snapshot">
-          <div className="proof-head"><span>Today’s readiness</span><span className="live-dot">Updated now</span></div>
-          <div className="proof-grid">
-            <div><strong>12</strong><span>drains checked</span></div>
-            <div><strong>4</strong><span>need action</span></div>
-            <div><strong>2.8<span>kg</span></strong><span>estimated litter intercepted</span></div>
-          </div>
-          <div className="proof-line"><span style={{ width: "76%" }} /></div>
-          <div className="proof-foot"><span>76% of pilot zone inspected</span><span>4 left</span></div>
+        <div className="hero-proof impact-chain" aria-label="Potential street-to-waterway impact chain">
+          <div className="proof-head"><span>Why intervene before rainfall?</span><span className="live-dot">Potential pathway</span></div>
+          <ol>
+            <li><b>01</b><span>Street litter</span></li>
+            <li><b>02</b><span>Blocked storm drain</span></li>
+            <li><b>03</b><span>Rainfall mobilizes waste</span></li>
+            <li><b>04</b><span>Potential transport toward waterways</span></li>
+            <li><b>05</b><span>Environmental concern</span></li>
+          </ol>
+          <p>DrainGuard intervenes through <strong>Detect → Prioritize → Act → Verify</strong>.</p>
         </div>
       </section>
 
@@ -856,7 +1083,7 @@ export default function Home() {
               <div className="file-name" title={fileName}>{fileName}</div>
             </div>
             <div className="photo-stage">
-              <NextImage id="inspection-image" src={imageUrl} alt="Storm drain submitted for inspection" fill sizes="(max-width: 1000px) 100vw, 62vw" unoptimized />
+              <NextImage id="inspection-image" src={imageUrl} alt="Storm drain submitted for inspection" fill sizes="(max-width: 1000px) 100vw, 62vw" priority unoptimized />
               <div className="scan-grid" aria-hidden="true" />
               {analysis.objects.map((object, index) => {
                 return (
@@ -875,7 +1102,7 @@ export default function Home() {
                 );
               })}
               <span className="photo-location">{selectedSite.place}</span>
-              <span className="photo-time">14 Aug · 18:42</span>
+              <span className="photo-time">{selectedSite.isDemo ? "Demo scenario" : "Device report"}</span>
             </div>
             <div className="photo-actions">
               <input ref={fileInput} onChange={chooseImage} type="file" accept="image/*" hidden aria-label="Upload a drain photo" />
@@ -914,33 +1141,45 @@ export default function Home() {
                 <div><span className="signal-icon">◇</span><span>Litter signal<small>Objects + visual texture</small></span></div>
                 <strong>{effectiveAnalysis.litter}%</strong>
               </div>
+              <div className="signal-row">
+                <div><span className="signal-icon">≈</span><span>Environmental context<small>{waterwayContext.message}</small></span></div>
+                <strong>{waterwayContext.status === "available" && waterwayContext.distanceMeters !== null ? `${waterwayContext.distanceMeters}m` : "—"}</strong>
+              </div>
             </div>
 
             <div className="scenario-control">
               <span>Weather scenario</span>
               <div>
                 <button className={mode === "live" ? "active" : ""} onClick={() => setMode("live")}>Live</button>
-                <button className={mode === "surge" ? "active" : ""} onClick={() => setMode("surge")}>Heavy rain</button>
+                <button className={mode === "surge" ? "active" : ""} onClick={() => applyRainfallScenario(64)}>Scenario</button>
               </div>
             </div>
 
             <div className="recommendation">
               <span>Recommended next step</span>
-              <p>{risk >= 80 ? "Dispatch a cleanup crew before the next rainfall window." : risk >= 60 ? "Inspect and clear this inlet within 24 hours." : "Keep on the watchlist and re-check after rainfall."}</p>
+              <p>{recommendedAction(risk, cleaned)}</p>
             </div>
             <button className="button button-full" onClick={() => setReportOpen(true)}>Generate field brief <span>→</span></button>
-            <p className="confidence">Drain presence {analysis.drainConfidence ?? analysis.confidence}% · evidence confidence {analysis.confidence}% · human verification required</p>
+            <p className="confidence">Drain presence {analysis.drainConfidence ?? analysis.confidence}% · evidence confidence {analysis.confidence}% · environmental coverage {environmentalResult.coverage}% · human verification required</p>
           </aside>
         </div>
+        <PriorityExplanation priority={priorityResult} environmental={environmentalResult} action={recommendedAction(risk, cleaned)} />
+        <RainfallScenarioExplorer scenarios={scenarios} onApply={applyRainfallScenario} />
       </section>
+
+      <EnvironmentalDashboard records={dashboardRecords} />
+
+      <div id="demo">
+        <DemoMode scenarios={DEMO_SCENARIOS} onSelect={loadDemoScenario} />
+      </div>
 
       <section className="queue-section" id="queue">
         <div className="section-intro compact">
           <div>
             <span className="kicker">02 · Prioritize</span>
-            <h2>One queue for the whole ward.</h2>
+            <h2>One environmental risk map.</h2>
           </div>
-          <p>Crews see the highest-risk inlet first—not simply the newest report.</p>
+          <p>Crews see cleanup priority, environmental concern, evidence status, and the recommended action—not simply the newest report.</p>
         </div>
 
         <div className="persistence-note">
@@ -968,23 +1207,23 @@ export default function Home() {
 
         <div className="queue-grid">
           <div className="map-card" aria-label="Priority map of inspected drains">
-            <div className="map-top"><span>{selectedSite.place}</span><span>{sites.length} mapped reports</span></div>
+            <div className="map-top"><span>{selectedSite.place}</span><span>{sites.length} mapped reports · symbols + labels</span></div>
             <DrainMap sites={sites} selectedId={selectedSite.id} onSelect={selectSite} />
           </div>
 
           <div className="queue-card">
-            <div className="queue-heading"><span>Cleanup queue</span><span>Sorted by risk</span></div>
+            <div className="queue-heading"><span>Cleanup queue</span><span>Sorted by cleanup priority</span></div>
             {sortedSites.map((site, index) => (
               <button className={`queue-row ${selectedSite.id === site.id ? "active" : ""}`} key={site.id} onClick={() => selectSite(site)}>
                 <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
-                <span className="queue-place"><strong>{site.place}</strong><small>{site.id} · {site.status}</small></span>
-                <span className={`queue-risk ${riskBand(site.risk).tone}`}>{site.risk}</span>
+                <span className="queue-place"><strong>{site.place}</strong><small>{site.id} · {site.status}{site.isDemo ? " · Demo scenario" : ""}<br />Environmental concern {site.environmentalRisk ?? "—"}/100</small></span>
+                <span className={`queue-risk ${riskBand(site.environmentalRisk ?? site.risk).tone}`} aria-label={`Environmental concern ${site.environmentalRisk ?? site.risk} out of 100`}>{site.status === "Verified clear" ? "✓" : site.status === "Needs review" ? "!" : site.environmentalRisk ?? site.risk}</span>
               </button>
             ))}
             <div className="selected-summary">
               <span>Selected</span>
               <strong>{selectedSite.id}</strong>
-              <p>{selectedSite.status}. Evidence is ready for the field brief.</p>
+              <p>{selectedSite.status}. Cleanup priority {selectedSite.risk}/100 · environmental concern {selectedSite.environmentalRisk ?? "unavailable"}{typeof selectedSite.environmentalRisk === "number" ? "/100" : ""}.</p>
             </div>
           </div>
         </div>
@@ -1038,10 +1277,9 @@ export default function Home() {
           <p className={`verification-message ${verificationResult?.verified ? "passed" : verificationResult ? "review" : ""}`} aria-live="polite">
             {!verificationResult && (verificationFileName ? `Analyzing ${verificationFileName}…` : `Selected report: ${selectedSite.id} · ${selectedSite.place}`)}
             {verificationResult?.verified && `Verified: ${verificationResult.sceneMatch}% same-drain match and visible obstruction fell by ${verificationResult.reduction} points. ${selectedSite.id} is now marked clear.`}
-            {verificationResult && !verificationResult.verified && (!verificationResult.sameDrain
-              ? `Needs review: only ${verificationResult.sceneMatch ?? 0}% scene match. Re-photograph the same drain from a similar angle.`
-              : `Needs review: obstruction changed by ${verificationResult.reduction} points. Upload a clearer after photo showing the full drain inlet.`)}
+            {verificationResult && !verificationResult.verified && `Human review required. ${verificationFailureReason || "The evidence could not be evaluated reliably."}`}
           </p>
+          <VerificationChecklist checks={verificationChecks} />
         </div>
         <div className={`verification-card ${cleaned ? "is-clean" : ""}`}>
           <div className="comparison-grid">
@@ -1076,7 +1314,7 @@ export default function Home() {
         </div>
         <div className="method-grid">
           <article><span>01</span><h3>See</h3><p>A drain-domain structure gate first rejects uncertain or non-drain photos. COCO-SSD is used only for visible litter—not as a drain model.</p></article>
-          <article><span>02</span><h3>Score</h3><p>A published formula weights blockage 55%, rainfall 30%, and litter 15% into one priority score.</p></article>
+          <article><span>02</span><h3>Score</h3><p>Central configuration drives cleanup priority and a separate environmental decision-support estimate. Missing waterway context lowers coverage instead of becoming a fake value.</p></article>
           <article><span>03</span><h3>Act</h3><p>The system ranks inspections and generates a concise, traceable field brief for cleanup teams.</p></article>
           <article><span>04</span><h3>Verify</h3><p>A normalized scene fingerprint must match the original drain before blockage reduction can close the task. Uncertain pairs go to human review.</p></article>
         </div>
@@ -1100,16 +1338,17 @@ export default function Home() {
           </div>
           <p className="evaluation-note">Twelve deterministic regression checks across blocked, clear, unchanged, wrong-scene, and non-drain decisions. This tests workflow logic—not field accuracy. The next milestone is an independently labelled Bengaluru set with precision, recall, and false-positive reporting.</p>
         </div>
+        <ValidationPanel />
         <div className="responsibility-note">
           <strong>Responsible use</strong>
-          <p>DrainGuard prioritizes inspections; it does not predict floods or replace engineering assessment. Scores depend on image quality and local rainfall data.</p>
-          <span>Prototype v0.10</span>
+          <p>DrainGuard supports inspection prioritization. It does not predict floods, measure pollution volume, or replace hydrological and engineering assessment. Scores depend on image quality, rainfall inputs, and available map context.</p>
+          <span>Prototype v0.11</span>
         </div>
       </section>
 
       <footer>
         <div className="brand footer-brand"><span className="brand-mark">DG</span><span>DrainGuard <i>AI</i></span></div>
-        <p>See a drain. Stop a flood.</p>
+        <p>Detect. Prioritize. Act. Verify.</p>
         <div><a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Weather: Open-Meteo</a><a href="https://www.michigan.gov/egle/about/organization/water-resources/stormwater" target="_blank" rel="noreferrer">Sample image: Michigan EGLE</a></div>
       </footer>
 
