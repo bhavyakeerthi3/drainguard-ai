@@ -6,110 +6,102 @@ DrainGuard AI
 
 ## Tagline
 
-Turn one street photo into an explainable drain-cleanup priority—then verify the cleanup with evidence.
+Stop street waste before the next storm moves it downstream.
 
 ## Short description
 
-DrainGuard AI helps municipal teams decide which reported storm drain to inspect first. It combines on-device visual analysis, location-specific rainfall, a transparent priority formula, a mapped cleanup queue, and before/after verification with human review.
+DrainGuard AI is an AI-assisted environmental monitoring prototype that helps identify blocked, litter-filled storm drains, prioritize cleanup using visible evidence, rainfall, and mapped waterway context, and verify the work with before-and-after evidence.
 
 ## Inspiration
 
-Before monsoon rain, municipal crews face a simple but difficult problem: they cannot inspect every drain. Cleanup is often reactive, based on the latest complaint rather than consistent evidence. A visibly blocked inlet surrounded by litter may need urgent attention, but teams rarely have one ranked list that also accounts for local rainfall.
-
-We wanted to build something narrower and more actionable than a flood prediction: a tool that helps answer, **“Which reported drain should we clean first?”**
+Municipal crews cannot inspect every drain before rainfall. Cleanup is often reactive and driven by the latest complaint instead of consistent evidence. Street litter can collect around blocked drains, and rainfall may transport visible waste toward waterways. We wanted to build something narrower and more actionable than a flood predictor: a tool that answers, **“Which reported drain should we inspect first, and can we prove it was cleaned?”**
 
 ## What it does
 
-DrainGuard follows an Inspect → Prioritize → Act → Verify workflow:
+DrainGuard follows a **Detect → Prioritize → Act → Verify** workflow:
 
-1. A field worker uploads a street photo.
-2. The app checks whether the image contains credible drain-like evidence.
-3. It estimates visible obstruction and litter.
-4. It fetches rainfall using that report's coordinates.
-5. A transparent formula calculates the cleanup priority.
-6. The report appears on a map and in a highest-risk-first queue.
-7. After cleanup, the worker uploads another photo.
-8. DrainGuard confirms that it appears to be the same drain and checks whether obstruction fell enough.
-9. Failed, uncertain, unchanged, or mismatched evidence enters a visible human-review queue.
+1. A worker uploads a street photo.
+2. The app checks whether it contains credible drain-like evidence.
+3. Client-side analysis estimates visible obstruction and litter.
+4. Rainfall is fetched using the report coordinates.
+5. OpenStreetMap / Overpass is queried for nearby mapped water features.
+6. Central scoring modules calculate cleanup priority and a separate environmental decision-support estimate.
+7. A prominent explanation shows every factor, weight, contribution, confidence, limitation, and recommended action.
+8. Reports appear on an accessible map and in a highest-priority-first queue.
+9. A second photo must pass same-scene, drain-evidence, obstruction-improvement, and litter checks before the report closes.
+10. Failed or uncertain evidence stays visible in a human-review queue.
 
-DrainGuard prioritizes inspections. It does not claim to predict floods or replace engineering assessment.
+The rainfall explorer uses controlled scenarios to show sensitivity. It does not present them as forecasts.
 
 ## How we built it
 
-The application is built with Next.js, React, TypeScript, Leaflet, OpenStreetMap and Open-Meteo, and is deployed on Vercel.
+The application uses Next.js, React, TypeScript, Leaflet, OpenStreetMap, Open-Meteo, TensorFlow.js, and COCO-SSD, and is deployed on Vercel.
 
-The client-side vision pipeline extracts grate-like edge structure, natural-scene colour and debris-tone evidence to gate uncertain inputs. TensorFlow.js COCO-SSD is then used only for visible litter classes—not presented as a drain-specific model. Texture and image features estimate obstruction.
+The client-side vision pipeline derives grate-like edge structure, natural-scene colour, debris tones, and texture. COCO-SSD is used only for visible litter classes; it is not presented as a storm-drain model.
 
-The public priority formula is:
+Cleanup priority is:
 
 ```text
 55% blockage + 30% rainfall index + 15% litter
 ```
 
-Before/after verification uses a normalized 12 × 8 scene fingerprint. A report can close only when the scene match, drain confidence, residual obstruction, residual litter and improvement thresholds all pass. Those policy rules live in a small auditable module shared with the automated tests.
+The environmental decision-support estimate is:
 
-## AI usage
+```text
+40% blockage + 30% rainfall index + 20% litter + 10% mapped waterway proximity
+```
 
-AI and computer vision are core to the workflow:
+If waterway data is unavailable, DrainGuard keeps the factor null, lowers evidence coverage, normalizes across available evidence, and explains the limitation. It never invents proximity.
 
-- on-device COCO-SSD identifies visible litter objects;
-- image features estimate drain evidence and visible obstruction;
-- a scene-fingerprint comparison protects before/after verification;
-- confidence gates route uncertain cases to a person instead of silently accepting them.
-
-The AI reduces the manual effort required to turn unstructured street photos into a consistent, ranked inspection queue. The product also exposes its formula and confidence limits so crews can understand why a report was prioritized.
+Before/after verification uses a normalized 12 × 8 scene fingerprint. A report can close only when the scene match, drain confidence, residual obstruction, residual litter, and improvement thresholds pass.
 
 ## Challenges
 
-- Generic object detectors do not contain a storm-drain blockage class.
-- Different lighting and camera angles can make before/after comparisons unreliable.
-- A convincing but unrelated clean-drain photo must never close another report.
-- Hackathon prototypes can look accurate while hiding very small evaluations.
+- General object detectors do not contain a storm-drain blockage class.
+- Lighting and camera angles make before/after comparisons difficult.
+- An unrelated clean-drain photo must never close another report.
+- Environmental map services can be incomplete or temporarily unavailable.
+- Demo statistics can easily be mistaken for real-world impact.
 
-We addressed these by separating drain evidence from litter detection, adding a same-scene gate, keeping uncertain cases in human review, and publishing exactly what our 12-case regression suite does and does not prove.
+We addressed these by separating drain evidence from litter detection, adding a same-scene gate, exposing each verification check, treating unavailable context explicitly, routing uncertainty to people, and labelling all sample content as demo data.
 
 ## Accomplishments
 
 - Working public application deployed on Vercel
-- Automatic photo analysis for user-uploaded images
-- Location-specific weather for every mapped report
-- Explainable priority score and sorted cleanup queue
+- Automatic analysis for user-uploaded images
+- Location-specific weather for mapped reports
+- Mapped waterway proximity with graceful failure handling
+- Centralized, configurable scoring weights
+- Dynamic “Why this priority?” explanations
+- Rainfall scenario explorer
+- Environmental dashboard with empty and demo states
+- Accessible environmental risk map using symbols, labels, and colour
 - Persistent before/after evidence on the inspection device
-- Same-drain mismatch protection
-- Visible human-review queue
-- 12 executable decision-regression cases
-- Clean production build, lint, and dependency audit
+- Same-drain mismatch protection and visible human review
+- 12 executable decision-policy cases plus 6 environmental-scoring tests
+- Clean strict TypeScript, lint, production build, dependency audit, and GitHub CI
 
 ## What we learned
 
-The most useful AI system is not always the one making the biggest prediction. A focused tool that prioritizes action, exposes its assumptions, and knows when to ask a human can be more practical for public infrastructure.
+The most useful AI system is not always the one making the biggest prediction. A focused tool that recommends a clear action, exposes its assumptions, and knows when to involve a human can be more practical for public infrastructure.
 
-We also learned that verification deserves as much design attention as detection. Closing the evidence loop changes the product from a reporting demo into an accountable workflow.
+We also learned that missing data must remain visible. Treating an unavailable waterway lookup as “low risk” would create false confidence, so DrainGuard reports reduced evidence coverage instead.
 
 ## What's next
 
-- shared authenticated Postgres and object storage for multi-user municipal teams;
-- a field-labelled Bengaluru dataset;
-- a trained drain-specific model for grates, silt, vegetation and litter;
-- precision, recall, calibration and false-positive reporting;
-- ward dashboards, crew assignment and an immutable audit trail.
+- Shared authenticated Postgres and object storage for municipal teams
+- A field-labelled Bengaluru drain dataset
+- A drain-specific model for grates, silt, vegetation, and litter
+- Precision, recall, calibration, and subgroup reporting
+- Validation of the environmental-risk policy with domain experts
+- Ward dashboards, crew assignment, and an immutable audit trail
 
 ## Links
 
 - Live application: <https://drainguard-ai-earth.vercel.app>
 - Source code: <https://github.com/bhavyakeerthi3/drainguard-ai>
-- Demo video: **add the final YouTube URL here before submitting**
+- Demo video: **add the final YouTube URL before submitting**
 
-## Suggested categories and tags
+## Suggested tags
 
-AI/ML, Climate Tech, Sustainability, Smart Cities, Computer Vision, Waste Reduction, Flood Resilience, Civic Tech
-
-## Final submission checklist
-
-- [ ] Add the YouTube demo URL above.
-- [ ] Confirm the GitHub repository is public.
-- [ ] Open the live demo in an incognito window.
-- [ ] Upload one blocked-drain photo during the video.
-- [ ] Show a different-scene after photo entering human review.
-- [ ] Show the map, live rainfall, ranked queue and 12-case evaluation.
-- [ ] State clearly that DrainGuard prioritizes cleanup and does not predict floods.
+Environmental Technology, AI/ML, Climate Tech, Sustainability, Smart Cities, Computer Vision, Waterway Protection, Waste Reduction, Civic Tech, Next.js, React, TypeScript, TensorFlow.js, Leaflet, OpenStreetMap, Open-Meteo, Vercel

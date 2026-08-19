@@ -2,11 +2,12 @@
 
 ## System goal
 
-DrainGuard converts visual drain inspections into an explainable cleanup queue. It deliberately separates three questions:
+DrainGuard converts visual drain inspections into an explainable environmental cleanup queue. It deliberately separates four questions:
 
 1. Is this credible drain evidence?
 2. How urgent is the cleanup under local rainfall?
 3. Does the after photo prove that the same drain was cleared?
+4. Is mapped environmental context available, and how much evidence coverage supports the estimate?
 
 ## End-to-end flow
 
@@ -24,7 +25,10 @@ sequenceDiagram
     Vision-->>UI: Drain confidence, blockage, litter
     UI->>Weather: Fetch forecast using report coordinates
     Weather-->>UI: Rainfall and probability
+    UI->>Map: Query nearby mapped water features
+    Map-->>UI: Distance or explicit unavailable state
     UI->>UI: Calculate transparent priority score
+    UI->>UI: Calculate environmental decision-support estimate
     UI->>Map: Add and rank report
     UI->>Store: Persist report and compressed evidence
     Worker->>UI: Upload after photo
@@ -42,6 +46,9 @@ sequenceDiagram
 | --- | --- | --- |
 | Inspection workflow | `app/page.tsx` | Upload, image preparation, analysis, risk calculation, persistence, review and verification UI |
 | Priority map | `app/DrainMap.tsx` | Leaflet map, markers, report selection and map movement |
+| Environmental panels | `app/EnvironmentalPanels.tsx` | Explanation, scenarios, aggregate metrics, demo mode, verification checks and validation boundaries |
+| Central scoring | `lib/scoring/` | Configurable priority, environmental-risk and rainfall-scenario calculations |
+| Environmental lookup | `lib/environment.ts` | OpenStreetMap / Overpass waterway proximity with explicit unavailable state |
 | Decision policy | `lib/decisions.js` | Auditable drain, priority and cleanup thresholds |
 | Regression suite | `tests/rendered-html.test.mjs` | Production build, feature wiring and 12 decision cases |
 
@@ -92,6 +99,17 @@ priority       = round(0.55 × blockage
 
 Low risk does not automatically mean `Verified clear`; that status requires after-cleanup evidence.
 
+## Environmental decision-support estimate
+
+```text
+environmental risk = 0.40 × blockage
+                   + 0.30 × rainfall index
+                   + 0.20 × litter
+                   + 0.10 × waterway proximity
+```
+
+Waterway proximity is derived only from mapped OpenStreetMap / Overpass features. If that lookup fails, the factor remains `null`, evidence coverage falls to 90%, and the score is normalized across the available evidence. Unavailable context is never converted into a zero-risk value.
+
 ## Cleanup verification policy
 
 The decision policy is intentionally isolated in `lib/decisions.js`. A report closes automatically only when:
@@ -113,6 +131,7 @@ Every failed condition retains the report for human review.
 | Open-Meteo forecast | Latitude and longitude | Location-specific rainfall | 18 mm pilot fallback |
 | Nominatim / Open-Meteo geocoding | User-entered location text | Convert place to coordinates | Ask for a more specific location |
 | OpenStreetMap tiles | Map viewport | Display inspection markers | Queue remains usable |
+| OpenStreetMap / Overpass | Report coordinates | Approximate proximity to mapped water features | Show unavailable; lower evidence coverage |
 | jsDelivr | Model-library request | Load TensorFlow.js and COCO-SSD | Visual-feature fallback |
 
 ## Persistence
