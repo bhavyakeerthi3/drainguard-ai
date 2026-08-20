@@ -1,84 +1,70 @@
 # Evaluation protocol
 
-## What is currently measured
+DrainGuard reports computer-vision performance separately from workflow-policy tests. Model metrics come from labelled images; deterministic workflow fixtures check that ranking, verification, and human-review rules do not regress.
 
-DrainGuard has a deterministic regression suite for decision policy and product wiring. The suite runs after a production Next.js build and checks that the deployed source contains the expected explainability, map, weather, persistence, verification, and human-review paths.
+## Held-out blockage audit
 
-The decision cases call the same pure functions used by the interface.
+The deployed artifact is the University of Reading ResNet-50 binary blockage classifier, converted to ONNX and statically quantized to INT8 for browser inference. Its threshold is calibrated on 28 balanced images from seven cameras. The final audit uses 40 different balanced images from the four cameras held out by the source paper: Crinnis, Mevagissey, Barnstaple Bradiford, and Siston.
 
-## Twelve decision cases
+Calibration and audit cameras never overlap. The source images are manually labelled `blocked` or `clear`, and the benchmark applies the crop coordinates published with the dataset before inference.
 
-| # | Case | Inputs | Expected result |
-| ---: | --- | --- | --- |
-| 1 | Blocked control A | drain 81%, risk 88 | Dispatch now |
-| 2 | Blocked control B | drain 74%, risk 72 | Inspect today |
-| 3 | Blocked control C | drain 66%, risk 54 | Monitor |
-| 4 | Clear control A | drain 79%, risk 34 | Monitor |
-| 5 | Clear control B | drain 71%, risk 25 | Monitor |
-| 6 | Clear control C | drain 63%, risk 18 | Monitor |
-| 7 | Same-drain cleanup A | match true, drain 82%, blocked 31%, litter 28%, reduction 41 | Verified |
-| 8 | Same-drain cleanup B | match true, drain 75%, blocked 44%, litter 39%, reduction 18 | Verified |
-| 9 | Unchanged after | match true, drain 82%, blocked 76%, litter 62%, reduction 0 | Review |
-| 10 | Different scene A | match false, drain 81%, blocked 22%, litter 20%, reduction 60 | Review |
-| 11 | Different scene B | match false, drain 76%, blocked 35%, litter 31%, reduction 36 | Review |
-| 12 | Non-drain input | drain 55%, risk 84 | Review |
+| Metric | Result |
+| --- | ---: |
+| Accuracy | 92.5% |
+| Balanced accuracy | 92.5% |
+| Blocked recall / sensitivity | 100% |
+| Clear specificity | 85% |
+| Precision | 87% |
+| F1 | 0.93 |
+| Accuracy 95% Wilson interval | 80.1%–97.4% |
 
-Run the suite with:
+### Confusion matrix
+
+| Actual \ Predicted | Blocked | Clear |
+| --- | ---: | ---: |
+| Blocked | 20 true positives | 0 false negatives |
+| Clear | 3 false positives | 17 true negatives |
+
+The old colour-and-texture fallback scored 50% balanced accuracy on this same audit. It remains only as an availability fallback if the browser model cannot load; it is not the primary AI claim.
+
+The source paper reports 88% average balanced accuracy for its binary classifier on the full research evaluation. DrainGuard's smaller 40-image audit verifies the exact quantized browser artifact and its integration; it does not supersede the paper.
+
+## Reproduce the artifact and results
 
 ```bash
+python -m pip install -r requirements-evaluation.txt
+python scripts/fetch_upstream_classifier.py
+python scripts/prepare_blockage_benchmark.py
+npm run evaluate:baseline
+npm run export:vision
 npm test
 ```
 
+The preparation script reads only the selected ranges from the 12 GB archive, uses a fixed seed, records every original archive member and crop, and removes unused benchmark images. Frozen outputs are stored in `evaluation/blockage-benchmark/`.
+
+## Twelve workflow decisions
+
+The policy suite calls the same pure functions used by the interface.
+
+| Group | Cases | Expected behavior |
+| --- | ---: | --- |
+| Blocked controls | 3 | Remain open and ranked |
+| Clear controls | 3 | Stay low priority |
+| Same-drain cleaned pairs | 2 | Match scene, then verify improvement |
+| Unchanged after evidence | 1 | Reject zero-point reduction |
+| Different-scene evidence | 2 | Reject scene mismatch |
+| Non-drain input | 1 | Route to human review |
+
 ## Environmental scoring checks
 
-The separate scoring suite executes the same centralized TypeScript functions used by the interface. It checks:
-
-- priority and environmental weights sum to 100%;
-- exact factor contributions remain explainable;
-- mapped waterway proximity contributes only when data is available;
-- unavailable context remains `null`, reduces evidence coverage, and is never fabricated as low risk;
-- unavailable rainfall remains `null`, reduces coverage, and never becomes a fixed fallback;
-- a real zero-rain forecast remains zero rather than being inflated;
-- partial external failure preserves valid weather data when the waterway provider is unavailable;
-- the environmental endpoint rejects missing or out-of-range coordinates;
-- the published 250 m and 750 m proximity thresholds behave at their boundaries;
-- cleanup priority increases monotonically across controlled dry, moderate, and heavy rainfall inputs.
-
-Run these checks with:
-
-```bash
-npm run test:scoring
-```
-
-## Manual browser checks
-
-The current production release has also been manually checked for:
-
-- same-image after evidence: 100% scene match and rejected for zero improvement;
-- different-scene after evidence: low scene match and routed to review;
-- non-drain control: confidence below the 60% threshold and routed to review;
-- no console errors in the tested production flow.
+The separate scoring suite executes the same centralized functions used by the interface. It checks that weights sum to 100%, missing rainfall and waterway context stay unavailable instead of becoming invented values, real zero rainfall stays zero, partial provider failure preserves valid data, proximity boundaries are exact, and priority rises monotonically across controlled rainfall scenarios.
 
 ## What these results do not establish
 
-The fixtures are policy-regression cases. They do not establish model accuracy, environmental-risk calibration, generalization, pollution volume, or real-world flood reduction. They must not be reported as precision, recall, detection accuracy, or environmental impact avoided.
+- The audit uses UK trash-screen CCTV imagery, not Bengaluru street-drain photos.
+- Forty images provide a useful integration audit but a wide confidence interval.
+- The audit does not validate flood prediction, pollution volume, environmental impact avoided, every drain design, night scenes, or unusual camera angles.
+- The three false positives show why clear-looking and uncertain reports still need review.
+- Same-drain verification needs a separate, larger matched-pair field study.
 
-## Field-evaluation plan
-
-A stronger study will use a held-out, independently labelled set containing:
-
-- blocked and clear drains;
-- multiple inlet and grate designs;
-- day, night, rain and shadow conditions;
-- urban litter, leaves, silt and vegetation;
-- deliberately difficult non-drain negatives;
-- matched and mismatched before/after pairs.
-
-The report will include:
-
-- drain-presence precision and recall;
-- blocked/clear confusion matrix;
-- false-negative rate for high-obstruction drains;
-- same-drain verification false-accept and false-reject rates;
-- confidence calibration;
-- results by lighting, camera angle and drain type.
+The next validation milestone is an independently labelled Bengaluru field set stratified by drain type, lighting, rain, angle, silt, vegetation, and litter.

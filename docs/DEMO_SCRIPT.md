@@ -10,7 +10,7 @@
 
 **Screen:** Select “Heavy blockage + litter” in Demo Mode, then show the photo result.
 
-> A field worker uploads one photo. DrainGuard checks for drain-like evidence, estimates visible obstruction, and uses COCO-SSD only for visible litter—not as a drain model.
+> A field worker uploads one photo. A domain-specific ResNet-50 estimates blockage locally in the browser, while COCO-SSD is used separately for visible litter. Uncertain or unrelated photos go to review.
 
 ## 0:27–0:44 — Explain and explore
 
@@ -32,6 +32,6 @@
 
 ## 1:16–1:30 — Validation and close
 
-**Screen:** Validation & Limitations.
+**Screen:** Held-out AI evaluation, then Validation & Limitations.
 
-> Automated tests cover scoring, rainfall sensitivity, missing environmental context, scene mismatches, and review routing. Field accuracy still needs a labelled dataset. DrainGuard is honest decision support: detect, prioritize, act, and verify before waste moves downstream.
+> On a balanced audit from four held-out cameras, the deployed model reached 92.5% accuracy, caught all 20 blocked examples, and correctly rejected 17 of 20 clear ones. We show the confusion matrix, confidence interval, and scope: this is a UK trash-screen proxy, not Bengaluru field accuracy. DrainGuard is honest decision support—detect, prioritize, act, and verify before waste moves downstream.

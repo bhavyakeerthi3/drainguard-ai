@@ -76,9 +76,9 @@ A result below 60% drain confidence enters `Needs review`, even if its calculate
 
 ### 3. Litter and obstruction
 
-COCO-SSD runs through TensorFlow.js in the client and provides visible object detections. Only a restricted set of litter-relevant classes affects the litter signal. Texture and debris-tone heuristics provide a fallback if the model resource is unavailable.
+The primary blockage model is the published University of Reading ResNet-50 classifier, converted to a 24 MB INT8 ONNX artifact and executed client-side through ONNX Runtime Web. Its threshold is calibrated separately and its browser artifact has a camera-separated audit. COCO-SSD runs through TensorFlow.js and provides visible object detections. Only a restricted set of litter-relevant classes affects the litter signal. Texture and debris-tone heuristics provide a labelled fallback if either model resource is unavailable.
 
-COCO-SSD is not represented as a drain-specific model.
+COCO-SSD is not represented as a drain-specific model; the ResNet-50 classifier supplies the blockage-domain signal.
 
 ### 4. Scene fingerprint
 
@@ -136,7 +136,7 @@ Every failed condition retains the report for human review.
 | Nominatim / Open-Meteo geocoding | User-entered location text | Convert place to coordinates | Ask for a more specific location |
 | OpenStreetMap tiles | Map viewport | Display inspection markers | Queue remains usable |
 | OpenStreetMap / Overpass | Report coordinates | Approximate proximity to mapped water features | Show unavailable; lower evidence coverage |
-| jsDelivr | Model-library request | Load TensorFlow.js and COCO-SSD | Visual-feature fallback |
+| jsDelivr | Model-library request | Load ONNX Runtime Web, TensorFlow.js, and COCO-SSD | Visual-feature fallback |
 
 The two environmental lookups run in parallel inside a Vercel Function. Each has a bounded timeout, so one slow provider does not erase valid data from the other. Successful API responses are cached at the edge for 15 minutes with stale-while-revalidate support.
 
@@ -163,7 +163,7 @@ This is suitable for a single-device pilot and demo. A municipal deployment requ
 - Visual obstruction is not hydraulic capacity.
 - Forecast data and image quality affect the priority score.
 - Low-confidence and mismatched evidence must remain reviewable by a person.
-- The current regression suite validates workflow policy, not field accuracy.
+- The model audit validates the exact browser artifact on a small UK trash-screen proxy set, not Bengaluru field accuracy.
 
 ## Production roadmap
 
