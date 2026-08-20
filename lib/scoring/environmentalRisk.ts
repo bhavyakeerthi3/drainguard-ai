@@ -27,14 +27,15 @@ export function waterwayConcernLabel(distanceMeters: number) {
 export function calculateEnvironmentalRisk(input: {
   blockage: number;
   litter: number;
-  rainfallMm: number;
+  rainfallMm: number | null;
   waterway: WaterwayContext;
   evidenceConfidence?: number;
 }): ExplainedScore {
   const weights = SCORING_CONFIG.environmental;
   const blockage = clampScore(input.blockage);
   const litter = clampScore(input.litter);
-  const rainfall = rainfallExposureIndex(input.rainfallMm);
+  const hasRainfall = typeof input.rainfallMm === "number" && Number.isFinite(input.rainfallMm);
+  const rainfall = hasRainfall ? rainfallExposureIndex(input.rainfallMm as number) : null;
   const hasWaterway = input.waterway.status === "available" && input.waterway.distanceMeters !== null;
   const proximity = hasWaterway ? waterwayProximityScore(input.waterway.distanceMeters as number) : null;
 
@@ -52,8 +53,10 @@ export function calculateEnvironmentalRisk(input: {
       name: "Rainfall exposure",
       rawValue: rainfall,
       weight: weights.rainfall,
-      contribution: rainfall * weights.rainfall,
-      explanation: `Uses ${Math.max(0, input.rainfallMm).toFixed(1)} mm as the current or selected scenario input.`,
+      contribution: rainfall === null ? null : rainfall * weights.rainfall,
+      explanation: hasRainfall
+        ? `Uses ${Math.max(0, input.rainfallMm as number).toFixed(1)} mm as the current or selected scenario input.`
+        : "Live rainfall is unavailable. No fallback rainfall value was invented.",
     },
     {
       key: "litter",
@@ -84,8 +87,8 @@ export function calculateEnvironmentalRisk(input: {
   const limitations = [
     "Environmental decision-support estimate; not a hydrological model or a prediction of pollution volume.",
   ];
+  if (!hasRainfall) limitations.push("Live rainfall was unavailable, so the score was normalized without that factor.");
   if (!hasWaterway) limitations.push("Mapped waterway context was unavailable, so the score was normalized across the available evidence.");
 
   return { score, level: scoreLevel(score), factors, confidence, coverage, limitations };
 }
-

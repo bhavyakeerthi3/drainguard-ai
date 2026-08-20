@@ -91,5 +91,19 @@ test("ships the environmental decision-support experience", async () => {
   assert.match(panels, /Sample data for demonstration/);
   assert.match(panels, /Still requires field validation/);
   assert.match(environment, /overpass-api\.de\/api\/interpreter/);
-  assert.match(environment, /Environmental context unavailable/);
+  assert.match(environment, /Mapped waterway context unavailable/);
+});
+
+test("uses a validated server endpoint and never inserts a fake rainfall fallback", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const route = await readFile(new URL("../app/api/environmental-context/route.ts", import.meta.url), "utf8");
+  const environment = await readFile(new URL("../lib/environment.ts", import.meta.url), "utf8");
+  assert.match(page, /\/api\/environmental-context\?latitude=/);
+  assert.doesNotMatch(page, /api\.open-meteo\.com\/v1\/forecast/);
+  assert.doesNotMatch(page, /Forecast fallback/);
+  assert.match(route, /-90, 90/);
+  assert.match(route, /-180, 180/);
+  assert.match(route, /s-maxage=900/);
+  assert.match(environment, /Promise\.all/);
+  assert.match(environment, /no fallback was invented/i);
 });

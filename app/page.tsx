@@ -14,7 +14,7 @@ import {
   type VerificationCheck,
 } from "./EnvironmentalPanels";
 import { inspectionDecision, passesCleanupVerification, priorityAction, SAME_DRAIN_THRESHOLD } from "../lib/decisions.js";
-import { fetchWaterwayContext } from "../lib/environment.ts";
+import type { EnvironmentalContextResponse } from "../lib/environment.ts";
 import { calculateEnvironmentalRisk, type WaterwayContext } from "../lib/scoring/environmentalRisk.ts";
 import { calculatePriorityScore, recommendedAction, scoreLevel } from "../lib/scoring/priority.ts";
 import { calculateRainfallScenarios } from "../lib/scoring/rainfallScenarios.ts";
@@ -303,8 +303,8 @@ function compareSceneFingerprints(before: number[], after: number[]) {
   return clamp(Math.round(((correlation + 1) / 2) * 100));
 }
 
-function scoreRisk(blockage: number, litter: number, rain: number) {
-  return calculatePriorityScore({ blockage, litter, rainfallMm: rain }).score;
+function scoreRisk(blockage: number, litter: number, rain: number | null | undefined) {
+  return calculatePriorityScore({ blockage, litter, rainfallMm: rain ?? null }).score;
 }
 
 function riskBand(risk: number) {
@@ -333,7 +333,7 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<Analysis>(SAMPLE_ANALYSIS);
   const [mode, setMode] = useState<"surge" | "live">("live");
   const [scenarioRainfall, setScenarioRainfall] = useState(64);
-  const [weatherStatus, setWeatherStatus] = useState("Loading location forecast");
+  const [weatherStatus, setWeatherStatus] = useState("Sample rainfall scenario");
   const [waterwayContext, setWaterwayContext] = useState<WaterwayContext>(() => waterwayContextForSite(INITIAL_SITES[0]));
   const [stage, setStage] = useState<"idle" | "loading" | "detecting" | "done">("idle");
   const [sites, setSites] = useState<MapSite[]>(INITIAL_SITES);
@@ -354,7 +354,7 @@ export default function Home() {
   const verificationInput = useRef<HTMLInputElement>(null);
   const nextLocationId = useRef(105);
 
-  const rainfall = mode === "surge" ? scenarioRainfall : (selectedSite.rainfall ?? 18);
+  const rainfall = mode === "surge" ? scenarioRainfall : (selectedSite.rainfall ?? null);
   const effectiveAnalysis = cleaned && verificationResult ? verificationResult : analysis;
   const priorityResult = useMemo(() => calculatePriorityScore({
     blockage: effectiveAnalysis.blockage,
@@ -409,62 +409,69 @@ export default function Home() {
   useEffect(() => {
     const controller = new AbortController();
     const targetSiteId = selectedSite.id;
-    fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${selectedSite.lat}&longitude=${selectedSite.lon}&daily=precipitation_sum,precipitation_probability_max&timezone=auto&forecast_days=1`,
-      { signal: controller.signal },
-    )
-      .then((response) => response.json())
-      .then((data) => {
-        const precipitation = Number(data?.daily?.precipitation_sum?.[0]);
-        const probability = Number(data?.daily?.precipitation_probability_max?.[0]);
-        const localRain = Number.isFinite(precipitation) ? Math.max(precipitation, 1) : 18;
-        const localStatus = Number.isFinite(probability)
-          ? `${probability}% rain probability · ${selectedSite.place}`
-          : `Location forecast · ${selectedSite.place}`;
-        const locationRisk = scoreRisk(effectiveAnalysis.blockage, effectiveAnalysis.litter, localRain);
-        setWeatherStatus(localStatus);
-        setSites((current) => current.map((site) => {
-          if (site.id !== targetSiteId) return site;
-          const status = ["Needs review", "Verified clear"].includes(site.status) ? site.status : priorityAction(locationRisk);
-          return { ...site, risk: locationRisk, status, rainfall: localRain, weatherStatus: localStatus };
-        }));
-        setSelectedSite((current) => {
-          if (current.id !== targetSiteId) return current;
-          const status = ["Needs review", "Verified clear"].includes(current.status) ? current.status : priorityAction(locationRisk);
-          return { ...current, risk: locationRisk, status, rainfall: localRain, weatherStatus: localStatus };
-        });
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setWeatherStatus(`Forecast fallback · ${selectedSite.place}`);
-      });
-    return () => controller.abort();
-  }, [effectiveAnalysis.blockage, effectiveAnalysis.litter, selectedSite.id, selectedSite.lat, selectedSite.lon, selectedSite.place]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const targetSiteId = selectedSite.id;
 
     async function loadEnvironmentalContext() {
-      const context = selectedSite.isDemo
-        ? (typeof selectedSite.environmentalDistanceMeters === "number" ? {
+      if (selectedSite.isDemo) {
+        const context = typeof selectedSite.environmentalDistanceMeters === "number" ? {
           status: "available" as const,
           distanceMeters: selectedSite.environmentalDistanceMeters,
           source: "OpenStreetMap / Overpass" as const,
           message: selectedSite.environmentalContext ?? `Demo scenario: mapped water feature approximately ${selectedSite.environmentalDistanceMeters} m away.`,
-        } : UNAVAILABLE_WATERWAY)
-        : await fetchWaterwayContext(selectedSite.lat, selectedSite.lon, controller.signal);
+        } : UNAVAILABLE_WATERWAY;
+        setWeatherStatus(`Sample data · ${selectedSite.place}`);
+        setWaterwayContext(context);
+        return;
+      }
+
+      setWeatherStatus(`Loading live rainfall · ${selectedSite.place}`);
+      setWaterwayContext({
+        status: "loading",
+        distanceMeters: null,
+        source: "OpenStreetMap / Overpass",
+        message: "Checking mapped waterways near this report…",
+      });
+      let data: Pick<EnvironmentalContextResponse, "weather" | "waterway">;
+      try {
+        const response = await fetch(
+          `/api/environmental-context?latitude=${selectedSite.lat}&longitude=${selectedSite.lon}`,
+          { signal: controller.signal },
+        );
+        if (!response.ok) throw new Error(`Environmental context returned ${response.status}`);
+        data = await response.json() as Pick<EnvironmentalContextResponse, "weather" | "waterway">;
+      } catch {
+        if (controller.signal.aborted) return;
+        data = {
+          weather: {
+            status: "unavailable",
+            precipitationMm: null,
+            probabilityPercent: null,
+            source: "Open-Meteo",
+            message: "Live rainfall unavailable. Priority uses visible evidence with lower coverage; no fallback was invented.",
+          },
+          waterway: UNAVAILABLE_WATERWAY,
+        };
+      }
       if (controller.signal.aborted) return;
+      const context = data.waterway;
+      const localRain = data.weather.status === "available" ? data.weather.precipitationMm : null;
+      const localStatus = `${data.weather.message} · ${selectedSite.place}`;
+      setWeatherStatus(localStatus);
       setWaterwayContext(context);
+      const locationRisk = scoreRisk(effectiveAnalysis.blockage, effectiveAnalysis.litter, localRain);
       const environmental = calculateEnvironmentalRisk({
         blockage: effectiveAnalysis.blockage,
         litter: effectiveAnalysis.litter,
-        rainfallMm: rainfall,
+        rainfallMm: localRain,
         waterway: context,
         evidenceConfidence: effectiveAnalysis.confidence,
       });
-      const action = recommendedAction(scoreRisk(effectiveAnalysis.blockage, effectiveAnalysis.litter, rainfall), cleaned);
+      const action = recommendedAction(locationRisk, cleaned);
       setSites((current) => current.map((site) => site.id === targetSiteId ? {
         ...site,
+        risk: locationRisk,
+        status: ["Needs review", "Verified clear"].includes(site.status) ? site.status : priorityAction(locationRisk),
+        rainfall: localRain ?? undefined,
+        weatherStatus: localStatus,
         blockage: effectiveAnalysis.blockage,
         litter: effectiveAnalysis.litter,
         environmentalRisk: environmental.score,
@@ -475,6 +482,10 @@ export default function Home() {
       } : site));
       setSelectedSite((current) => current.id === targetSiteId ? {
         ...current,
+        risk: locationRisk,
+        status: ["Needs review", "Verified clear"].includes(current.status) ? current.status : priorityAction(locationRisk),
+        rainfall: localRain ?? undefined,
+        weatherStatus: localStatus,
         blockage: effectiveAnalysis.blockage,
         litter: effectiveAnalysis.litter,
         environmentalRisk: environmental.score,
@@ -487,7 +498,7 @@ export default function Home() {
 
     void loadEnvironmentalContext();
     return () => controller.abort();
-  }, [cleaned, effectiveAnalysis.blockage, effectiveAnalysis.confidence, effectiveAnalysis.litter, rainfall, selectedSite.environmentalContext, selectedSite.environmentalDistanceMeters, selectedSite.id, selectedSite.isDemo, selectedSite.lat, selectedSite.lon]);
+  }, [cleaned, effectiveAnalysis.blockage, effectiveAnalysis.confidence, effectiveAnalysis.litter, selectedSite.environmentalContext, selectedSite.environmentalDistanceMeters, selectedSite.id, selectedSite.isDemo, selectedSite.lat, selectedSite.lon, selectedSite.place]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- Hydrate the device-persistent pilot after the client mounts. */
   useEffect(() => {
@@ -548,6 +559,7 @@ export default function Home() {
 
   function selectSite(site: MapSite, suppliedRecord?: EvidenceRecord) {
     const record = suppliedRecord ?? evidenceBySite[site.id];
+    if (!site.isDemo) setMode("live");
     setSelectedSite(site);
     setWeatherStatus(site.weatherStatus ?? `Loading forecast · ${site.place}`);
     setWaterwayContext(site.isDemo ? waterwayContextForSite(site) : {
@@ -891,22 +903,20 @@ export default function Home() {
         return;
       }
 
+      const locationRisk = scoreRisk(analysis.blockage, analysis.litter, null);
       const site: MapSite = {
         id: `DG-${nextLocationId.current++}`,
         place: result.place,
-        risk,
-        status: priorityAction(risk),
+        risk: locationRisk,
+        status: priorityAction(locationRisk),
         lat: result.lat,
         lon: result.lon,
-        rainfall,
-        weatherStatus,
+        weatherStatus: `Loading live rainfall · ${result.place}`,
         blockage: analysis.blockage,
         litter: analysis.litter,
-        environmentalRisk: environmentalResult.score,
-        environmentalLevel: environmentalResult.level,
         environmentalContext: "Checking mapped waterways near this report…",
         environmentalDistanceMeters: null,
-        recommendedAction: recommendedAction(risk),
+        recommendedAction: recommendedAction(locationRisk),
         photo: imageUrl,
         isDemo: false,
       };
@@ -1019,7 +1029,7 @@ export default function Home() {
     window.requestAnimationFrame(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }));
   }
 
-  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nCleanup priority: ${band.label.toUpperCase()} (${risk}/100)\nEnvironmental impact risk: ${environmentalResult.score}/100 (${environmentalResult.confidence} confidence · ${environmentalResult.coverage}% coverage)\nLocation: ${selectedSite.place}\nObserved blockage: ${effectiveAnalysis.blockage}%\nLitter signal: ${effectiveAnalysis.litter}%\nEnvironmental context: ${waterwayContext.message}\nVerification: ${cleaned ? `Passed · ${verificationResult?.reduction ?? 0} point obstruction reduction` : "Pending field evidence"}\nRainfall input: ${rainfall.toFixed(1)} mm / 24h\n\nRecommended action: ${recommendedAction(risk, cleaned)}\n\nDecision-support estimate only. This is not a flood prediction, hydrological model, pollution-volume estimate, or emergency alert.`;
+  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nCleanup priority: ${band.label.toUpperCase()} (${risk}/100)\nEnvironmental impact risk: ${environmentalResult.score}/100 (${environmentalResult.confidence} confidence · ${environmentalResult.coverage}% coverage)\nLocation: ${selectedSite.place}\nObserved blockage: ${effectiveAnalysis.blockage}%\nLitter signal: ${effectiveAnalysis.litter}%\nEnvironmental context: ${waterwayContext.message}\nVerification: ${cleaned ? `Passed · ${verificationResult?.reduction ?? 0} point obstruction reduction` : "Pending field evidence"}\nRainfall input: ${rainfall === null ? "Unavailable (not estimated)" : `${rainfall.toFixed(1)} mm / 24h`}\n\nRecommended action: ${recommendedAction(risk, cleaned)}\n\nDecision-support estimate only. This is not a flood prediction, hydrological model, pollution-volume estimate, or emergency alert.`;
 
   async function copyReport() {
     await navigator.clipboard.writeText(report);
@@ -1083,7 +1093,7 @@ export default function Home() {
               <div className="file-name" title={fileName}>{fileName}</div>
             </div>
             <div className="photo-stage">
-              <NextImage id="inspection-image" src={imageUrl} alt="Storm drain submitted for inspection" fill sizes="(max-width: 1000px) 100vw, 62vw" priority unoptimized />
+              <NextImage id="inspection-image" src={imageUrl} alt="Storm drain submitted for inspection" fill sizes="(max-width: 1000px) 100vw, 62vw" loading="eager" unoptimized />
               <div className="scan-grid" aria-hidden="true" />
               {analysis.objects.map((object, index) => {
                 return (
@@ -1135,7 +1145,7 @@ export default function Home() {
               </div>
               <div className="signal-row">
                 <div><span className="signal-icon">⌁</span><span>Rainfall exposure<small>{mode === "surge" ? "Demo monsoon scenario" : weatherStatus}</small></span></div>
-                <strong>{rainfall.toFixed(1)}<small> mm</small></strong>
+                <strong>{rainfall === null ? "—" : rainfall.toFixed(1)}<small>{rainfall === null ? " unavailable" : " mm"}</small></strong>
               </div>
               <div className="signal-row">
                 <div><span className="signal-icon">◇</span><span>Litter signal<small>Objects + visual texture</small></span></div>
@@ -1284,7 +1294,7 @@ export default function Home() {
         <div className={`verification-card ${cleaned ? "is-clean" : ""}`}>
           <div className="comparison-grid">
             <div className="comparison-pane">
-              <NextImage src={imageUrl} alt="Drain before cleanup" fill sizes="(max-width: 1000px) 50vw, 27vw" unoptimized />
+              <NextImage src={imageUrl} alt="Drain before cleanup" fill sizes="(max-width: 1000px) 50vw, 27vw" loading="eager" unoptimized />
               <span className="comparison-label">Before · {analysis.blockage}% blocked</span>
             </div>
             <div className={`comparison-pane after-pane ${verificationImageUrl ? "has-photo" : ""}`}>
@@ -1342,7 +1352,7 @@ export default function Home() {
         <div className="responsibility-note">
           <strong>Responsible use</strong>
           <p>DrainGuard supports inspection prioritization. It does not predict floods, measure pollution volume, or replace hydrological and engineering assessment. Scores depend on image quality, rainfall inputs, and available map context.</p>
-          <span>Prototype v0.11</span>
+          <span>Prototype v0.12</span>
         </div>
       </section>
 
