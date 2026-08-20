@@ -18,7 +18,7 @@ import type { EnvironmentalContextResponse } from "../lib/environment.ts";
 import { calculateEnvironmentalRisk, type WaterwayContext } from "../lib/scoring/environmentalRisk.ts";
 import { calculatePriorityScore, recommendedAction, scoreLevel } from "../lib/scoring/priority.ts";
 import { calculateRainfallScenarios } from "../lib/scoring/rainfallScenarios.ts";
-import modelEvaluation from "../evaluation/blockage-benchmark/results.json";
+import blockageModelMetadata from "../public/models/drain-blockage-resnet50-v1.json";
 import {
   calculateBaseVisionScores,
   calculateDrainConfidence,
@@ -49,6 +49,8 @@ type VerificationResult = Analysis & {
   sameDrain: boolean;
   verified: boolean;
 };
+
+const modelEvaluation = { test: blockageModelMetadata.evaluation };
 
 type EvidenceRecord = {
   beforeImage: string;
