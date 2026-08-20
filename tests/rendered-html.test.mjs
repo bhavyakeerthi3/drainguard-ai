@@ -72,11 +72,12 @@ test("ships the final pilot safeguards and evidence surfaces", async () => {
   assert.match(page, /latitude=\$\{selectedSite\.lat\}/);
   assert.match(page, /Human review/);
   assert.match(page, /originalStatus = "Needs review"/);
-  assert.match(page, /Prototype evaluation/);
+  assert.match(page, /Held-out AI evaluation/);
+  assert.match(page, /accuracy on unseen cameras/);
   assert.match(page, /12\/12 expected decisions/);
   assert.match(page, /Different-scene after photos/);
   assert.match(page, /Drain not confirmed · human review/);
-  assert.match(page, /workflow logic—not field accuracy/);
+  assert.match(page, /not claimed Bengaluru street-drain accuracy/);
 });
 
 test("ships the environmental decision-support experience", async () => {

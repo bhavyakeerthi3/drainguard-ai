@@ -18,6 +18,14 @@ import type { EnvironmentalContextResponse } from "../lib/environment.ts";
 import { calculateEnvironmentalRisk, type WaterwayContext } from "../lib/scoring/environmentalRisk.ts";
 import { calculatePriorityScore, recommendedAction, scoreLevel } from "../lib/scoring/priority.ts";
 import { calculateRainfallScenarios } from "../lib/scoring/rainfallScenarios.ts";
+import modelEvaluation from "../evaluation/blockage-benchmark/results.json";
+import {
+  calculateBaseVisionScores,
+  calculateDrainConfidence,
+  clamp,
+  compareSceneFingerprints,
+  extractVisualSignalsFromRgba,
+} from "../lib/vision.js";
 
 type Detection = {
   class: string;
@@ -62,9 +70,26 @@ type Detector = {
   detect: (image: HTMLImageElement) => Promise<Array<{ class: string; score: number; bbox: number[] }>>;
 };
 
+type BlockageModelMetadata = {
+  model: string;
+  threshold: number;
+};
+
+type BlockageClassifier = {
+  session: {
+    run: (feeds: Record<string, unknown>) => Promise<Record<string, { data: ArrayLike<number> }>>;
+  };
+  metadata: BlockageModelMetadata;
+};
+
 declare global {
   interface Window {
     cocoSsd?: { load: (options?: { base?: string }) => Promise<Detector> };
+    ort?: {
+      env: { wasm: { wasmPaths: string; numThreads: number } };
+      Tensor: new (type: "float32", data: Float32Array, dimensions: number[]) => unknown;
+      InferenceSession: { create: (model: string, options: { executionProviders: string[] }) => Promise<BlockageClassifier["session"]> };
+    };
   }
 }
 
@@ -108,6 +133,7 @@ const UNAVAILABLE_WATERWAY: WaterwayContext = {
 };
 
 let detectorPromise: Promise<Detector> | null = null;
+let blockageClassifierPromise: Promise<BlockageClassifier> | null = null;
 
 function loadScript(src: string) {
   return new Promise<void>((resolve, reject) => {
@@ -163,8 +189,26 @@ async function getDetector() {
   }
 }
 
-function clamp(value: number, min = 0, max = 100) {
-  return Math.min(max, Math.max(min, value));
+async function getBlockageClassifier() {
+  if (!blockageClassifierPromise) {
+    blockageClassifierPromise = (async () => {
+      await loadScript("https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/ort.min.js");
+      if (!window.ort) throw new Error("Blockage model runtime did not initialize");
+      window.ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/";
+      window.ort.env.wasm.numThreads = 1;
+      const response = await fetch("/models/drain-blockage-resnet50-v1.json");
+      if (!response.ok) throw new Error("Blockage model metadata unavailable");
+      const metadata = await response.json() as BlockageModelMetadata;
+      const session = await window.ort.InferenceSession.create(metadata.model, { executionProviders: ["wasm"] });
+      return { session, metadata };
+    })();
+  }
+  try {
+    return await blockageClassifierPromise;
+  } catch (error) {
+    blockageClassifierPromise = null;
+    throw error;
+  }
 }
 
 async function loadImage(src: string) {
@@ -199,108 +243,42 @@ function extractVisualSignals(image: HTMLImageElement) {
   canvas.width = size;
   canvas.height = size;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) return { texture: 0.45, debrisTone: 0.4, naturalColor: 0.35, drainStructure: 0.5, fingerprint: [] as number[] };
+  if (!context) return extractVisualSignalsFromRgba([], 0, 0);
   context.drawImage(image, 0, 0, size, size);
   const pixels = context.getImageData(0, 0, size, size).data;
-  let dark = 0;
-  let earthy = 0;
-  let colorful = 0;
-  let edge = 0;
-  let horizontalEdge = 0;
-  let verticalEdge = 0;
-  const luminance: number[] = [];
-
-  for (let i = 0; i < pixels.length; i += 4) {
-    const r = pixels[i];
-    const g = pixels[i + 1];
-    const b = pixels[i + 2];
-    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    luminance.push(lum);
-    if (lum < 72) dark += 1;
-    if (r > b * 1.14 && g > b * 1.04 && r < 190) earthy += 1;
-    if (Math.max(r, g, b) - Math.min(r, g, b) > 22) colorful += 1;
-  }
-
-  for (let y = 1; y < size; y += 1) {
-    for (let x = 1; x < size; x += 1) {
-      const current = luminance[y * size + x];
-      const left = luminance[y * size + x - 1];
-      const above = luminance[(y - 1) * size + x];
-      const horizontalDelta = Math.abs(current - above);
-      const verticalDelta = Math.abs(current - left);
-      if (horizontalDelta + verticalDelta > 75) edge += 1;
-      if (horizontalDelta > 42) horizontalEdge += 1;
-      if (verticalDelta > 42) verticalEdge += 1;
-    }
-  }
-
-  const gridWidth = 12;
-  const gridHeight = 8;
-  const fingerprint: number[] = [];
-  for (let gy = 0; gy < gridHeight; gy += 1) {
-    for (let gx = 0; gx < gridWidth; gx += 1) {
-      let total = 0;
-      let count = 0;
-      const startX = Math.floor((gx / gridWidth) * size);
-      const endX = Math.floor(((gx + 1) / gridWidth) * size);
-      const startY = Math.floor((gy / gridHeight) * size);
-      const endY = Math.floor(((gy + 1) / gridHeight) * size);
-      for (let y = startY; y < endY; y += 1) {
-        for (let x = startX; x < endX; x += 1) {
-          total += luminance[y * size + x];
-          count += 1;
-        }
-      }
-      fingerprint.push(total / Math.max(1, count));
-    }
-  }
-  const mean = fingerprint.reduce((sum, value) => sum + value, 0) / fingerprint.length;
-  const variance = fingerprint.reduce((sum, value) => sum + (value - mean) ** 2, 0) / fingerprint.length;
-  const deviation = Math.max(12, Math.sqrt(variance));
-  const normalizedFingerprint = fingerprint.map((value) => clamp((value - mean) / deviation, -2.5, 2.5));
-  const edgeSamples = (size - 1) * (size - 1);
-  const horizontalDensity = horizontalEdge / edgeSamples;
-  const verticalDensity = verticalEdge / edgeSamples;
-  const drainStructure = clamp(
-    Math.min(horizontalDensity + verticalDensity, 0.34) / 0.34 * 0.62
-      + Math.min(horizontalDensity, verticalDensity, 0.1) / 0.1 * 0.38,
-    0,
-    1,
-  );
-
-  return {
-    texture: edge / ((size - 1) * (size - 1)),
-    debrisTone: (dark + earthy * 0.7) / (size * size),
-    naturalColor: colorful / (size * size),
-    drainStructure,
-    fingerprint: normalizedFingerprint,
-  };
+  return extractVisualSignalsFromRgba(pixels, size, size);
 }
 
-function calculateDrainConfidence(drainStructure: number, debrisTone: number, naturalColor: number, predictions: Detection[]) {
-  const unrelatedClasses = new Set(["person", "car", "truck", "bus", "dog", "cat", "chair", "couch", "bed", "tv", "laptop"]);
-  const unrelatedArea = predictions.reduce((total, item) => {
-    if (!unrelatedClasses.has(item.class)) return total;
-    return total + (item.bbox[2] * item.bbox[3]) / 10000;
-  }, 0);
-  const surfaceEvidence = Math.min(debrisTone / 0.45, 1);
-  const naturalSceneEvidence = Math.min(naturalColor / 0.55, 1);
-  return clamp(Math.round(18 + drainStructure * 42 + surfaceEvidence * 18 + naturalSceneEvidence * 28 - Math.min(unrelatedArea, 0.7) * 42), 8, 96);
+async function classifyBlockage(image: HTMLImageElement) {
+  const classifier = await getBlockageClassifier();
+  if (!window.ort) throw new Error("Blockage model runtime unavailable");
+  const size = 224;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Blockage model canvas unavailable");
+  context.drawImage(image, 0, 0, size, size);
+  const pixels = context.getImageData(0, 0, size, size).data;
+  const tensorData = new Float32Array(3 * size * size);
+  const means = [0.485, 0.456, 0.406];
+  const deviations = [0.229, 0.224, 0.225];
+  for (let pixelIndex = 0; pixelIndex < size * size; pixelIndex += 1) {
+    for (let channel = 0; channel < 3; channel += 1) {
+      tensorData[channel * size * size + pixelIndex] = (pixels[pixelIndex * 4 + channel] / 255 - means[channel]) / deviations[channel];
+    }
+  }
+  const tensor = new window.ort.Tensor("float32", tensorData, [1, 3, size, size]);
+  const result = await classifier.session.run({ image: tensor });
+  const probability = Number(result.blocked_probability.data[0]);
+  return { probability, threshold: classifier.metadata.threshold };
 }
 
-function compareSceneFingerprints(before: number[], after: number[]) {
-  if (before.length === 0 || before.length !== after.length) return 0;
-  let dot = 0;
-  let beforeMagnitude = 0;
-  let afterMagnitude = 0;
-  for (let index = 0; index < before.length; index += 1) {
-    dot += before[index] * after[index];
-    beforeMagnitude += before[index] ** 2;
-    afterMagnitude += after[index] ** 2;
-  }
-  if (beforeMagnitude === 0 || afterMagnitude === 0) return 0;
-  const correlation = dot / Math.sqrt(beforeMagnitude * afterMagnitude);
-  return clamp(Math.round(((correlation + 1) / 2) * 100));
+function combineDrainConfidence(baseConfidence: number, classification: { probability: number } | null) {
+  if (!classification || baseConfidence < 38) return baseConfidence;
+  const certainty = Math.abs(classification.probability - 0.5) * 2;
+  if (certainty < 0.6) return baseConfidence;
+  return Math.max(baseConfidence, clamp(Math.round(55 + certainty * 35), 0, 94));
 }
 
 function scoreRisk(blockage: number, litter: number, rain: number | null | undefined) {
@@ -377,6 +355,9 @@ export default function Home() {
   }), [effectiveAnalysis.blockage, effectiveAnalysis.confidence, effectiveAnalysis.litter, waterwayContext]);
   const risk = priorityResult.score;
   const band = riskBand(risk);
+  const action = !cleaned && stage === "done" && (effectiveAnalysis.drainConfidence ?? effectiveAnalysis.confidence) < 60
+    ? "Human review required before dispatch."
+    : recommendedAction(risk, cleaned);
   const sortedSites = useMemo(() => [...sites].sort((a, b) => b.risk - a.risk), [sites]);
   const reviewSites = useMemo(() => sites.filter((site) => site.status === "Needs review"), [sites]);
   const dashboardRecords = useMemo(() => sites.map((site) => ({
@@ -638,8 +619,8 @@ export default function Home() {
       const visual = extractVisualSignals(image);
       const beforeImage = await loadImage(imageUrl);
       const beforeFingerprint = analysis.fingerprint ?? extractVisualSignals(beforeImage).fingerprint;
-      const baseBlockage = clamp(Math.round(24 + visual.debrisTone * 64 + visual.texture * 88), 14, 94);
-      const baseLitter = clamp(Math.round(14 + visual.texture * 105), 8, 96);
+      const { blockage: baseBlockage, litter: baseLitter } = calculateBaseVisionScores(visual);
+      const blockageClassificationPromise = classifyBlockage(image).catch(() => null);
       setVerificationStage("detecting");
 
       let predictions: Detection[] = [];
@@ -668,10 +649,13 @@ export default function Home() {
       const litterObjects = predictions.filter((item) =>
         ["bottle", "cup", "book", "handbag", "backpack", "umbrella"].includes(item.class),
       ).length;
-      const blockage = clamp(baseBlockage + litterObjects * 5, 14, 94);
+      const blockageClassification = await blockageClassificationPromise;
+      const blockage = blockageClassification
+        ? clamp(Math.round(blockageClassification.probability * 100), 14, 94)
+        : clamp(baseBlockage + litterObjects * 5, 14, 94);
       const litter = clamp(baseLitter + litterObjects * 18, 8, 96);
       const reduction = Math.max(0, beforeBlockage - blockage);
-      const drainConfidence = calculateDrainConfidence(visual.drainStructure, visual.debrisTone, visual.naturalColor, predictions);
+      const drainConfidence = combineDrainConfidence(calculateDrainConfidence(visual, predictions), blockageClassification);
       const sceneMatch = compareSceneFingerprints(beforeFingerprint, visual.fingerprint);
       const sameDrain = sceneMatch >= SAME_DRAIN_THRESHOLD;
       const verified = passesCleanupVerification({ sameDrain, drainConfidence, blockage, litter, reduction });
@@ -771,8 +755,8 @@ export default function Home() {
     try {
       const image = await loadImage(source);
       const visual = extractVisualSignals(image);
-      const baseBlockage = clamp(Math.round(24 + visual.debrisTone * 64 + visual.texture * 88), 14, 94);
-      const baseLitter = clamp(Math.round(14 + visual.texture * 105), 8, 96);
+      const { blockage: baseBlockage, litter: baseLitter } = calculateBaseVisionScores(visual);
+      const blockageClassificationPromise = classifyBlockage(image).catch(() => null);
 
       setAnalysis({
         blockage: baseBlockage,
@@ -809,9 +793,12 @@ export default function Home() {
       const litterObjects = predictions.filter((item) =>
         ["bottle", "cup", "book", "handbag", "backpack", "umbrella"].includes(item.class),
       ).length;
-      const blockage = clamp(baseBlockage + litterObjects * 5, 14, 94);
+      const blockageClassification = await blockageClassificationPromise;
+      const blockage = blockageClassification
+        ? clamp(Math.round(blockageClassification.probability * 100), 14, 94)
+        : clamp(baseBlockage + litterObjects * 5, 14, 94);
       const litter = clamp(baseLitter + litterObjects * 18, 8, 96);
-      const drainConfidence = calculateDrainConfidence(visual.drainStructure, visual.debrisTone, visual.naturalColor, predictions);
+      const drainConfidence = combineDrainConfidence(calculateDrainConfidence(visual, predictions), blockageClassification);
       const confidence = Math.min(
         drainConfidence,
         clamp(Math.round((modelUsed ? 78 : 59) + Math.min(predictions.length, 4) * 3), 0, 94),
@@ -827,7 +814,9 @@ export default function Home() {
         fingerprint: visual.fingerprint,
         objects: predictions,
         signal: drainConfirmed
-          ? (modelUsed ? "Drain gate + COCO litter detector" : "Drain gate · offline litter estimate")
+          ? (blockageClassification
+            ? (modelUsed ? "Research ResNet-50 + COCO litter" : "Research ResNet-50 · litter fallback")
+            : (modelUsed ? "Visual fallback + COCO litter detector" : "Offline visual fallback"))
           : "Drain not confirmed · human review",
       };
       setAnalysis(finalAnalysis);
@@ -1029,7 +1018,7 @@ export default function Home() {
     window.requestAnimationFrame(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }));
   }
 
-  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nCleanup priority: ${band.label.toUpperCase()} (${risk}/100)\nEnvironmental impact risk: ${environmentalResult.score}/100 (${environmentalResult.confidence} confidence · ${environmentalResult.coverage}% coverage)\nLocation: ${selectedSite.place}\nObserved blockage: ${effectiveAnalysis.blockage}%\nLitter signal: ${effectiveAnalysis.litter}%\nEnvironmental context: ${waterwayContext.message}\nVerification: ${cleaned ? `Passed · ${verificationResult?.reduction ?? 0} point obstruction reduction` : "Pending field evidence"}\nRainfall input: ${rainfall === null ? "Unavailable (not estimated)" : `${rainfall.toFixed(1)} mm / 24h`}\n\nRecommended action: ${recommendedAction(risk, cleaned)}\n\nDecision-support estimate only. This is not a flood prediction, hydrological model, pollution-volume estimate, or emergency alert.`;
+  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nCleanup priority: ${band.label.toUpperCase()} (${risk}/100)\nEnvironmental impact risk: ${environmentalResult.score}/100 (${environmentalResult.confidence} confidence · ${environmentalResult.coverage}% coverage)\nLocation: ${selectedSite.place}\nObserved blockage: ${effectiveAnalysis.blockage}%\nLitter signal: ${effectiveAnalysis.litter}%\nEnvironmental context: ${waterwayContext.message}\nVerification: ${cleaned ? `Passed · ${verificationResult?.reduction ?? 0} point obstruction reduction` : "Pending field evidence"}\nRainfall input: ${rainfall === null ? "Unavailable (not estimated)" : `${rainfall.toFixed(1)} mm / 24h`}\n\nRecommended action: ${action}\n\nDecision-support estimate only. This is not a flood prediction, hydrological model, pollution-volume estimate, or emergency alert.`;
 
   async function copyReport() {
     await navigator.clipboard.writeText(report);
@@ -1167,13 +1156,13 @@ export default function Home() {
 
             <div className="recommendation">
               <span>Recommended next step</span>
-              <p>{recommendedAction(risk, cleaned)}</p>
+              <p>{action}</p>
             </div>
             <button className="button button-full" onClick={() => setReportOpen(true)}>Generate field brief <span>→</span></button>
             <p className="confidence">Drain presence {analysis.drainConfidence ?? analysis.confidence}% · evidence confidence {analysis.confidence}% · environmental coverage {environmentalResult.coverage}% · human verification required</p>
           </aside>
         </div>
-        <PriorityExplanation priority={priorityResult} environmental={environmentalResult} action={recommendedAction(risk, cleaned)} />
+        <PriorityExplanation priority={priorityResult} environmental={environmentalResult} action={action} />
         <RainfallScenarioExplorer scenarios={scenarios} onApply={applyRainfallScenario} />
       </section>
 
@@ -1323,14 +1312,49 @@ export default function Home() {
           <h2>AI proposes. Evidence explains.<br />People decide.</h2>
         </div>
         <div className="method-grid">
-          <article><span>01</span><h3>See</h3><p>A drain-domain structure gate first rejects uncertain or non-drain photos. COCO-SSD is used only for visible litter—not as a drain model.</p></article>
+          <article><span>01</span><h3>See</h3><p>A research-backed ResNet-50 classifies blockage locally in the browser. A drain-domain gate rejects uncertain photos; COCO-SSD is used only for visible litter.</p></article>
           <article><span>02</span><h3>Score</h3><p>Central configuration drives cleanup priority and a separate environmental decision-support estimate. Missing waterway context lowers coverage instead of becoming a fake value.</p></article>
           <article><span>03</span><h3>Act</h3><p>The system ranks inspections and generates a concise, traceable field brief for cleanup teams.</p></article>
           <article><span>04</span><h3>Verify</h3><p>A normalized scene fingerprint must match the original drain before blockage reduction can close the task. Uncertain pairs go to human review.</p></article>
         </div>
-        <div className="evaluation-panel">
+        <div className="model-evaluation-panel" id="model-evaluation">
+          <div className="model-evaluation-head">
+            <div>
+              <span className="kicker">Held-out AI evaluation</span>
+              <h3>{(modelEvaluation.test.accuracy * 100).toFixed(1)}% accuracy on unseen cameras.</h3>
+              <p>Balanced blocked-versus-clear audit using the four cameras held out by the source research.</p>
+            </div>
+            <div className="model-audit-badge"><strong>{modelEvaluation.test.samples}</strong><span>labelled test images</span></div>
+          </div>
+          <div className="model-metrics">
+            <div><span>Blocked recall</span><strong>{Math.round(modelEvaluation.test.recall * 100)}%</strong><small>{modelEvaluation.test.confusionMatrix.tp} / {modelEvaluation.test.confusionMatrix.tp + modelEvaluation.test.confusionMatrix.fn} blocked caught</small></div>
+            <div><span>Clear specificity</span><strong>{Math.round(modelEvaluation.test.specificity * 100)}%</strong><small>{modelEvaluation.test.confusionMatrix.tn} / {modelEvaluation.test.confusionMatrix.tn + modelEvaluation.test.confusionMatrix.fp} clear correct</small></div>
+            <div><span>Precision</span><strong>{Math.round(modelEvaluation.test.precision * 100)}%</strong><small>{modelEvaluation.test.confusionMatrix.fp} false alarms</small></div>
+            <div><span>F1 score</span><strong>{modelEvaluation.test.f1.toFixed(2)}</strong><small>balanced classification quality</small></div>
+          </div>
+          <div className="model-evaluation-body">
+            <div>
+              <span className="matrix-title">Confusion matrix · held-out audit</span>
+              <table className="confusion-matrix">
+                <thead><tr><th>Actual</th><th>Predicted blocked</th><th>Predicted clear</th></tr></thead>
+                <tbody>
+                  <tr><th>Blocked</th><td className="matrix-correct">{modelEvaluation.test.confusionMatrix.tp} <small>TP</small></td><td>{modelEvaluation.test.confusionMatrix.fn} <small>FN</small></td></tr>
+                  <tr><th>Clear</th><td>{modelEvaluation.test.confusionMatrix.fp} <small>FP</small></td><td className="matrix-correct">{modelEvaluation.test.confusionMatrix.tn} <small>TN</small></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div className="audit-protocol">
+              <span>Audit protocol</span>
+              <p>Threshold fixed on 28 images from seven different cameras, then tested once on 40 balanced images from four source-paper test cameras.</p>
+              <strong>95% accuracy interval: {(modelEvaluation.test.accuracyWilson95[0] * 100).toFixed(1)}–{(modelEvaluation.test.accuracyWilson95[1] * 100).toFixed(1)}%</strong>
+              <a href="https://doi.org/10.17864/1947.000498" target="_blank" rel="noreferrer">Open dataset + research weights ↗</a>
+            </div>
+          </div>
+          <p className="model-limit"><strong>Scope:</strong> this is a reproducible proxy audit on UK trash-screen imagery, not claimed Bengaluru street-drain accuracy and not flood prediction. Uncertain field images still go to human review.</p>
+        </div>
+        <div className="evaluation-panel workflow-evaluation">
           <div className="evaluation-head">
-            <div><span className="kicker">Prototype evaluation</span><h3>Expanded decision regression.</h3></div>
+            <div><span className="kicker">Safety regression</span><h3>Workflow logic also stays tested.</h3></div>
             <strong>12/12 expected decisions</strong>
           </div>
           <div className="evaluation-table-wrap">
@@ -1346,20 +1370,20 @@ export default function Home() {
               </tbody>
             </table>
           </div>
-          <p className="evaluation-note">Twelve deterministic regression checks across blocked, clear, unchanged, wrong-scene, and non-drain decisions. This tests workflow logic—not field accuracy. The next milestone is an independently labelled Bengaluru set with precision, recall, and false-positive reporting.</p>
+          <p className="evaluation-note">Twelve deterministic checks cover ranking, clear evidence, unchanged cleanup, wrong-scene evidence, and non-drain review routing. These verify workflow policy separately from the model audit above.</p>
         </div>
         <ValidationPanel />
         <div className="responsibility-note">
           <strong>Responsible use</strong>
           <p>DrainGuard supports inspection prioritization. It does not predict floods, measure pollution volume, or replace hydrological and engineering assessment. Scores depend on image quality, rainfall inputs, and available map context.</p>
-          <span>Prototype v0.12</span>
+          <span>Prototype v0.13</span>
         </div>
       </section>
 
       <footer>
         <div className="brand footer-brand"><span className="brand-mark">DG</span><span>DrainGuard <i>AI</i></span></div>
         <p>Detect. Prioritize. Act. Verify.</p>
-        <div><a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Weather: Open-Meteo</a><a href="https://www.michigan.gov/egle/about/organization/water-resources/stormwater" target="_blank" rel="noreferrer">Sample image: Michigan EGLE</a></div>
+        <div><a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Weather: Open-Meteo</a><a href="https://doi.org/10.17864/1947.000498" target="_blank" rel="noreferrer">Model/data: U. Reading</a><a href="https://www.michigan.gov/egle/about/organization/water-resources/stormwater" target="_blank" rel="noreferrer">Sample: Michigan EGLE</a></div>
       </footer>
 
       {reportOpen && (
