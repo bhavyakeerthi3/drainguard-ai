@@ -23,6 +23,7 @@ It is a prioritization aid, not a flood predictor or replacement for engineering
 ## What it does
 
 - analyzes an uploaded drain photo directly in the browser;
+- runs a research-backed, drain-specific ResNet-50 classifier on labelled clear/blocked imagery;
 - checks for drain-like structural and scene evidence before trusting a result;
 - uses COCO-SSD only for visible litter objects, not as a drain model;
 - fetches rainfall for each report's latitude and longitude through a validated server endpoint backed by Open-Meteo;
@@ -59,13 +60,13 @@ If rainfall or waterway context cannot be retrieved, DrainGuard does not invent 
 
 DrainGuard uses a layered evidence pipeline:
 
-1. **Drain evidence gate** — image structure, edge geometry, natural-scene color, and debris-tone signals estimate whether the photo contains credible drain evidence.
-2. **Litter detection** — client-side COCO-SSD identifies visible objects such as bottles and cups.
-3. **Obstruction estimation** — image texture, dark regions, earthy debris tones, and detected litter contribute to the visible obstruction score.
+1. **Drain-specific blockage classifier** — the published University of Reading ResNet-50 blockage classifier estimates clear versus blocked evidence entirely in the browser through ONNX Runtime Web. Its 24 MB INT8 export keeps photos on-device.
+2. **Drain evidence gate** — image structure, edge geometry, natural-scene color, and debris-tone signals reject uncertain or unrelated photos.
+3. **Litter detection** — client-side COCO-SSD identifies visible objects such as bottles and cups; it is not presented as a drain model.
 4. **Same-drain verification** — normalized low-resolution scene fingerprints compare before/after composition. A pair needs at least a 68% scene match.
 5. **Human review** — uncertain evidence never automatically closes a cleanup report.
 
-This architecture is designed to be transparent about the current prototype: the drain gate is an engineered domain layer, while COCO-SSD is a generic object detector used only for litter.
+The threshold is fixed on seven calibration cameras and the local audit uses the four cameras held out by the source paper. The engineered visual score remains an offline fallback if the ONNX runtime cannot load.
 
 ## Verification rules
 
@@ -83,8 +84,8 @@ Otherwise, the report enters the visible human-review queue.
 
 ```mermaid
 flowchart LR
-    A["Street photo"] --> B["Drain evidence gate"]
-    B --> C["Litter and obstruction analysis"]
+    A["Street photo"] --> B["ResNet-50 blockage classifier"]
+    B --> C["Drain gate + COCO litter analysis"]
     C --> D["Explainable risk engine"]
     E["Coordinates"] --> API["Validated environmental-context API"]
     API --> F["Open-Meteo rainfall"]
@@ -105,6 +106,8 @@ flowchart LR
 - Next.js route handler / Vercel Function for resilient environmental lookups
 - TypeScript
 - TensorFlow.js with COCO-SSD
+- ONNX Runtime Web with a drain-specific, INT8-quantized ResNet-50 classifier
+- PyTorch and ONNX Runtime for reproducible export and camera-separated evaluation
 - Leaflet and OpenStreetMap
 - Open-Meteo weather and geocoding APIs
 - OpenStreetMap Overpass environmental-context lookup
@@ -133,24 +136,30 @@ No API keys are required for the current prototype.
 npm run lint
 npm run typecheck
 npm run test:scoring
+npm run evaluate:baseline
+npm run export:vision
 npm test
 npm audit
 ```
 
-The automated suite verifies the production build, risk formula, live map wiring, cleanup workflow, safeguards, and 12 documented decision-regression cases.
+The automated suite verifies the production build, risk formula, live map wiring, cleanup workflow, safeguards, benchmark split integrity, and 12 documented decision-regression cases.
 
 ## Current evaluation
 
-The prototype has 12 deterministic workflow checks covering:
+The browser classifier achieved **92.5% accuracy and balanced accuracy** on a reproducible 40-image balanced audit from the four cameras held out by the source research: 20/20 blocked images detected and 17/20 clear images correctly rejected.
 
-- three blocked-drain controls;
-- three clear-drain controls;
-- two valid same-drain cleanup pairs;
-- one unchanged after-cleanup pair;
-- two different-scene pairs;
-- one non-drain input.
+| Metric | Held-out result |
+| --- | ---: |
+| Accuracy / balanced accuracy | 92.5% |
+| Blocked recall | 100% |
+| Clear specificity | 85% |
+| Precision | 87% |
+| F1 | 0.93 |
+| Accuracy 95% Wilson interval | 80.1%–97.4% |
 
-These checks validate workflow decisions, not real-world model accuracy. A field-labelled Bengaluru dataset with precision, recall, and false-positive reporting is the next validation milestone.
+The threshold was selected on 28 images from seven different calibration cameras. Calibration and audit cameras do not overlap. The source paper reports 88% average balanced accuracy for its classifier on its full evaluation; DrainGuard's smaller audit is provided to verify the exact quantized browser artifact, not to replace that study.
+
+The proxy dataset contains UK trash screens rather than Bengaluru street inlets, so these numbers are not claimed as Bengaluru field accuracy. The app separately retains 12 deterministic workflow checks for ranking, wrong-scene rejection, and human-review routing. See [the full protocol](docs/EVALUATION.md) and [model card](docs/MODEL_CARD.md).
 
 ## Privacy and persistence
 
@@ -163,7 +172,10 @@ app/                  Next.js interface, map, panels, and analysis workflow
 lib/scoring/          centralized priority, environmental, and scenario scoring
 lib/environment.ts    parallel, failure-tolerant weather and waterway lookups
 lib/decisions.js      auditable verification thresholds
+lib/vision.js         shared browser and baseline visual features
 public/               demo and social-preview assets
+evaluation/           labelled audit fixtures, manifests, and frozen results
+scripts/              reproducible data preparation, export, and evaluation
 tests/                build and decision-regression tests
 docs/                 architecture and submission documentation
 ```
@@ -177,8 +189,10 @@ DrainGuard prioritizes visual inspections. Environmental scores are decision-sup
 - Weather: [Open-Meteo](https://open-meteo.com/)
 - Maps: [OpenStreetMap](https://www.openstreetmap.org/) and [Leaflet](https://leafletjs.com/)
 - Object model: [TensorFlow.js COCO-SSD](https://github.com/tensorflow/tfjs-models/tree/master/coco-ssd)
+- Blockage dataset and classifier weights: [University of Reading Research Data Archive](https://doi.org/10.17864/1947.000498)
+- Source research: [Vandaele, Dance, and Ojha (2024)](https://doi.org/10.2166/hydro.2024.013)
 - Demonstration drain image: [Michigan EGLE](https://www.michigan.gov/egle/about/organization/water-resources/stormwater)
 
 ## License
 
-Released under the [MIT License](LICENSE).
+DrainGuard application code is released under the [MIT License](LICENSE). The research-derived blockage model, upstream reference files, and benchmark images retain their source licences: CC BY 4.0 for the dataset/code/weights and Open Government Licence v3.0 for the Crown Copyright images. See [the model card](docs/MODEL_CARD.md) for attribution.
