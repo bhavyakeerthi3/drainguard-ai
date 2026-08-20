@@ -15,6 +15,7 @@ DrainGuard converts visual drain inspections into an explainable environmental c
 sequenceDiagram
     actor Worker as Field worker
     participant UI as Next.js client
+    participant API as Environmental-context API
     participant Vision as On-device vision
     participant Weather as Open-Meteo
     participant Map as Leaflet / OSM
@@ -23,10 +24,12 @@ sequenceDiagram
     Worker->>UI: Upload before photo
     UI->>Vision: Extract visual signals
     Vision-->>UI: Drain confidence, blockage, litter
-    UI->>Weather: Fetch forecast using report coordinates
-    Weather-->>UI: Rainfall and probability
-    UI->>Map: Query nearby mapped water features
-    Map-->>UI: Distance or explicit unavailable state
+    UI->>API: Send validated report coordinates
+    par Independent lookups
+        API->>Weather: Fetch coordinate-specific forecast
+        API->>Map: Query nearby mapped water features
+    end
+    API-->>UI: Partial or complete environmental context
     UI->>UI: Calculate transparent priority score
     UI->>UI: Calculate environmental decision-support estimate
     UI->>Map: Add and rank report
@@ -48,7 +51,8 @@ sequenceDiagram
 | Priority map | `app/DrainMap.tsx` | Leaflet map, markers, report selection and map movement |
 | Environmental panels | `app/EnvironmentalPanels.tsx` | Explanation, scenarios, aggregate metrics, demo mode, verification checks and validation boundaries |
 | Central scoring | `lib/scoring/` | Configurable priority, environmental-risk and rainfall-scenario calculations |
-| Environmental lookup | `lib/environment.ts` | OpenStreetMap / Overpass waterway proximity with explicit unavailable state |
+| Environmental endpoint | `app/api/environmental-context/route.ts` | Coordinate validation, HTTP caching, and a single client-facing data boundary |
+| Environmental lookup | `lib/environment.ts` | Parallel Open-Meteo and Overpass lookups with independent unavailable states and timeouts |
 | Decision policy | `lib/decisions.js` | Auditable drain, priority and cleanup thresholds |
 | Regression suite | `tests/rendered-html.test.mjs` | Production build, feature wiring and 12 decision cases |
 
@@ -108,7 +112,7 @@ environmental risk = 0.40 × blockage
                    + 0.10 × waterway proximity
 ```
 
-Waterway proximity is derived only from mapped OpenStreetMap / Overpass features. If that lookup fails, the factor remains `null`, evidence coverage falls to 90%, and the score is normalized across the available evidence. Unavailable context is never converted into a zero-risk value.
+Waterway proximity is derived only from mapped OpenStreetMap / Overpass features. If that lookup fails, the factor remains `null`, evidence coverage falls to 90%, and the score is normalized across the available evidence. If rainfall is unavailable, that factor also remains `null`; cleanup-priority coverage falls to 70%, and environmental coverage falls by 30 percentage points. Unavailable context is never converted into a zero-risk or made-up forecast value.
 
 ## Cleanup verification policy
 
@@ -128,11 +132,13 @@ Every failed condition retains the report for human review.
 
 | Service | Data sent | Purpose | Fallback |
 | --- | --- | --- | --- |
-| Open-Meteo forecast | Latitude and longitude | Location-specific rainfall | 18 mm pilot fallback |
+| Open-Meteo forecast | Latitude and longitude | Location-specific rainfall | Explicit unavailable state; normalize across visible evidence |
 | Nominatim / Open-Meteo geocoding | User-entered location text | Convert place to coordinates | Ask for a more specific location |
 | OpenStreetMap tiles | Map viewport | Display inspection markers | Queue remains usable |
 | OpenStreetMap / Overpass | Report coordinates | Approximate proximity to mapped water features | Show unavailable; lower evidence coverage |
 | jsDelivr | Model-library request | Load TensorFlow.js and COCO-SSD | Visual-feature fallback |
+
+The two environmental lookups run in parallel inside a Vercel Function. Each has a bounded timeout, so one slow provider does not erase valid data from the other. Successful API responses are cached at the edge for 15 minutes with stale-while-revalidate support.
 
 ## Persistence
 
