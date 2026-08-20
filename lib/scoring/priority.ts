@@ -44,12 +44,13 @@ export function recommendedAction(score: number, verified = false) {
 export function calculatePriorityScore(input: {
   blockage: number;
   litter: number;
-  rainfallMm: number;
+  rainfallMm: number | null;
   evidenceConfidence?: number;
 }): ExplainedScore {
   const blockage = clampScore(input.blockage);
   const litter = clampScore(input.litter);
-  const rainfall = rainfallExposureIndex(input.rainfallMm);
+  const hasRainfall = typeof input.rainfallMm === "number" && Number.isFinite(input.rainfallMm);
+  const rainfall = hasRainfall ? rainfallExposureIndex(input.rainfallMm as number) : null;
   const weights = SCORING_CONFIG.priority;
   const factors: ScoreFactor[] = [
     {
@@ -65,8 +66,10 @@ export function calculatePriorityScore(input: {
       name: "Rainfall exposure",
       rawValue: rainfall,
       weight: weights.rainfall,
-      contribution: rainfall * weights.rainfall,
-      explanation: `Based on ${Math.max(0, input.rainfallMm).toFixed(1)} mm in the selected live or scenario context.`,
+      contribution: rainfall === null ? null : rainfall * weights.rainfall,
+      explanation: hasRainfall
+        ? `Based on ${Math.max(0, input.rainfallMm as number).toFixed(1)} mm in the selected live or scenario context.`
+        : "Live rainfall is unavailable. No fallback rainfall value was invented.",
     },
     {
       key: "litter",
@@ -77,16 +80,21 @@ export function calculatePriorityScore(input: {
       explanation: litter >= 60 ? "Strong visible litter evidence increases cleanup urgency." : "Visible litter evidence contributes to prioritization.",
     },
   ];
-  const score = Math.round(factors.reduce((total, factor) => total + (factor.contribution ?? 0), 0));
-  const confidence = (input.evidenceConfidence ?? 70) >= 80 ? "high" : (input.evidenceConfidence ?? 70) >= 60 ? "medium" : "low";
+  const availableWeight = factors.reduce((total, factor) => total + (factor.contribution === null ? 0 : factor.weight), 0);
+  const weightedTotal = factors.reduce((total, factor) => total + (factor.contribution ?? 0), 0);
+  const score = Math.round(clampScore(weightedTotal / Math.max(availableWeight, 0.01)));
+  const coverage = Math.round(availableWeight * 100);
+  const confidenceValue = Math.min(input.evidenceConfidence ?? 70, coverage);
+  const confidence = confidenceValue >= 80 ? "high" : confidenceValue >= 60 ? "medium" : "low";
+  const limitations = ["Decision-support score; not a flood prediction or emergency alert."];
+  if (!hasRainfall) limitations.push("Live rainfall was unavailable, so the score was normalized across visible evidence only.");
 
   return {
     score,
     level: scoreLevel(score),
     factors,
     confidence,
-    coverage: 100,
-    limitations: ["Decision-support score; not a flood prediction or emergency alert."],
+    coverage,
+    limitations,
   };
 }
-
