@@ -25,7 +25,7 @@ It is a prioritization aid, not a flood predictor or replacement for engineering
 - analyzes an uploaded drain photo directly in the browser;
 - checks for drain-like structural and scene evidence before trusting a result;
 - uses COCO-SSD only for visible litter objects, not as a drain model;
-- fetches rainfall for each report's latitude and longitude from Open-Meteo;
+- fetches rainfall for each report's latitude and longitude through a validated server endpoint backed by Open-Meteo;
 - calculates a transparent priority score;
 - calculates a separate environmental decision-support estimate with explicit evidence coverage;
 - looks up nearby mapped rivers, streams, canals, and water bodies through OpenStreetMap / Overpass;
@@ -53,7 +53,7 @@ environmental risk = 0.40 × blockage
                    + 0.10 × mapped waterway proximity
 ```
 
-If waterway context cannot be retrieved, DrainGuard does not invent a value. It normalizes across available evidence, lowers evidence coverage, and exposes the limitation.
+If rainfall or waterway context cannot be retrieved, DrainGuard does not invent a value. It normalizes across available evidence, lowers evidence coverage, and exposes the limitation.
 
 ## AI and computer vision
 
@@ -86,9 +86,10 @@ flowchart LR
     A["Street photo"] --> B["Drain evidence gate"]
     B --> C["Litter and obstruction analysis"]
     C --> D["Explainable risk engine"]
-    E["Coordinates"] --> F["Open-Meteo rainfall"]
+    E["Coordinates"] --> API["Validated environmental-context API"]
+    API --> F["Open-Meteo rainfall"]
+    API --> W["OSM / Overpass waterway context"]
     F --> D
-    E --> W["OSM / Overpass waterway context"]
     W --> D
     D --> G["Ranked map and cleanup queue"]
     G --> H["After-cleanup photo"]
@@ -101,6 +102,7 @@ flowchart LR
 ## Technology
 
 - Next.js 16 and React 19
+- Next.js route handler / Vercel Function for resilient environmental lookups
 - TypeScript
 - TensorFlow.js with COCO-SSD
 - Leaflet and OpenStreetMap
@@ -159,7 +161,7 @@ Photo analysis runs client-side. Reports and compressed evidence currently persi
 ```text
 app/                  Next.js interface, map, panels, and analysis workflow
 lib/scoring/          centralized priority, environmental, and scenario scoring
-lib/environment.ts    failure-tolerant waterway lookup
+lib/environment.ts    parallel, failure-tolerant weather and waterway lookups
 lib/decisions.js      auditable verification thresholds
 public/               demo and social-preview assets
 tests/                build and decision-regression tests

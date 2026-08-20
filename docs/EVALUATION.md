@@ -37,6 +37,10 @@ The separate scoring suite executes the same centralized TypeScript functions us
 - exact factor contributions remain explainable;
 - mapped waterway proximity contributes only when data is available;
 - unavailable context remains `null`, reduces evidence coverage, and is never fabricated as low risk;
+- unavailable rainfall remains `null`, reduces coverage, and never becomes a fixed fallback;
+- a real zero-rain forecast remains zero rather than being inflated;
+- partial external failure preserves valid weather data when the waterway provider is unavailable;
+- the environmental endpoint rejects missing or out-of-range coordinates;
 - the published 250 m and 750 m proximity thresholds behave at their boundaries;
 - cleanup priority increases monotonically across controlled dry, moderate, and heavy rainfall inputs.
 
