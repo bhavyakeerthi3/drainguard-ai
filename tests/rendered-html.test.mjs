@@ -30,7 +30,7 @@ test("connects location search to a real garbage-risk map", async () => {
   assert.match(page, /Where is the garbage\?/);
   assert.match(page, /nominatim\.openstreetmap\.org\/search/);
   assert.match(page, /geocoding-api\.open-meteo\.com/);
-  assert.match(page, /<DrainMap sites=\{sites\}/);
+  assert.match(page, /<DrainMap sites=\{queueSites\}/);
   assert.match(map, /tile\.openstreetmap\.org/);
   assert.match(map, /map\.flyTo/);
 });
@@ -109,6 +109,23 @@ test("ships the judge walkthrough, operational impact, review actions, and compa
   assert.match(styles, /judge-narrator/);
   assert.match(styles, /impact-strip/);
   assert.match(styles, /comparison-slider/);
+});
+
+test("ships Priority Shock and transparent capacity allocation", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const panels = await readFile(new URL("../app/EnvironmentalPanels.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(page, /PriorityShockPanel/);
+  assert.match(page, /ActionPlanner/);
+  assert.match(page, /The drains did not change\. The conditions did\./);
+  assert.match(panels, /Priority Shock/);
+  assert.match(panels, /existing scoring logic/);
+  assert.match(panels, /Why is this not in today/);
+  assert.match(panels, /Transparent capacity allocation/);
+  assert.match(panels, /route optimization/);
+  assert.match(styles, /priority-shock/);
+  assert.match(styles, /action-planner/);
+  assert.match(styles, /rank-movement/);
 });
 
 test("ships the environmental decision-support experience", async () => {
