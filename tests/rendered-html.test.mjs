@@ -94,6 +94,23 @@ test("explains AI evidence and protects the upload path", async () => {
   assert.match(styles, /image-error/);
 });
 
+test("ships the judge walkthrough, operational impact, review actions, and comparison slider", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(page, /Run judge demo/);
+  assert.match(page, /Judge Mode active/);
+  assert.match(page, /Operational impact snapshot/);
+  assert.match(page, /Queue position/);
+  assert.match(page, /Approve closure/);
+  assert.match(page, /Request photo/);
+  assert.match(page, /comparisonSplit/);
+  assert.match(page, /Same-drain anchor/);
+  assert.match(page, /version: 3/);
+  assert.match(styles, /judge-mode-banner/);
+  assert.match(styles, /impact-strip/);
+  assert.match(styles, /comparison-slider/);
+});
+
 test("ships the environmental decision-support experience", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const panels = await readFile(new URL("../app/EnvironmentalPanels.tsx", import.meta.url), "utf8");
