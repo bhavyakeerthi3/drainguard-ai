@@ -8,6 +8,7 @@ import {
   EnvironmentalDashboard,
   PriorityExplanation,
   RainfallScenarioExplorer,
+  TrustPanel,
   ValidationPanel,
   VerificationChecklist,
   type DemoScenario,
@@ -127,6 +128,14 @@ const DEMO_SCENARIOS: DemoScenario[] = [
   { id: "verified", title: "Verified cleanup", description: "A successful same-scene before/after decision.", blockage: 28, litter: 24, rainfallMm: 12, status: "Verified clear", environmentalDistanceMeters: 420 },
   { id: "review", title: "Human review required", description: "Uncertain evidence remains open for a person.", blockage: 67, litter: 51, rainfallMm: 18, status: "Needs review", environmentalDistanceMeters: null },
 ];
+
+const JUDGE_STEPS = [
+  { id: "detect", label: "Detect", title: "A storm is approaching.", copy: "We start with visible evidence from the street: a blocked drain, litter, and the current rainfall scenario.", hint: "Visible evidence first · controlled demonstration data" },
+  { id: "prioritize", label: "Prioritize", title: "AI turns evidence into a decision.", copy: "The same drain is scored with blockage, litter, rainfall, and mapped context so a crew can act on a ranked recommendation.", hint: "Why this one? Every point has a visible reason." },
+  { id: "act", label: "Act", title: "Crews see what to inspect next.", copy: "The report enters a queue sorted by cleanup priority instead of waiting behind the newest complaint.", hint: "One crew · send them to the highest-priority report" },
+  { id: "verify", label: "Verify", title: "Cleanup needs evidence.", copy: "A second image must match the same scene and show meaningful improvement before the report can close.", hint: "Upload an after photo to run the real verification gate" },
+  { id: "close", label: "Close the loop", title: "Detection alone is not the finish line.", copy: "DrainGuard connects detection to verified action. Uncertain evidence stays visible for human review.", hint: "Verified clear appears only when the evidence passes" },
+] as const;
 
 const UNAVAILABLE_WATERWAY: WaterwayContext = {
   status: "unavailable",
@@ -321,6 +330,14 @@ function waterwayContextForSite(site: MapSite): WaterwayContext {
   return UNAVAILABLE_WATERWAY;
 }
 
+function queueReason(site: MapSite) {
+  if (site.status === "Verified clear") return "Cleanup verified · routine monitoring";
+  if (site.status === "Needs review") return "Uncertain evidence · human review";
+  if ((site.blockage ?? 0) >= 75 && (site.rainfall ?? 0) >= 25) return "Heavy obstruction + rainfall exposure";
+  if ((site.blockage ?? 0) >= 60 || (site.litter ?? 0) >= 60) return "Visible obstruction + litter evidence";
+  return "Lower-risk report · monitor conditions";
+}
+
 export default function Home() {
   const [imageUrl, setImageUrl] = useState("/demo-drain.jpg");
   const [fileName, setFileName] = useState("EGLE stormwater sample");
@@ -346,6 +363,8 @@ export default function Home() {
   const [evidenceBySite, setEvidenceBySite] = useState<Record<string, EvidenceRecord>>({});
   const [reviewDecisions, setReviewDecisions] = useState<Record<string, "open" | "approved" | "request-photo">>({});
   const [judgeMode, setJudgeMode] = useState(false);
+  const [judgeStep, setJudgeStep] = useState(0);
+  const [pitchMode, setPitchMode] = useState(false);
   const [comparisonMode, setComparisonMode] = useState<"side-by-side" | "slider">("side-by-side");
   const [comparisonSplit, setComparisonSplit] = useState(50);
   const [persistenceReady, setPersistenceReady] = useState(false);
@@ -384,6 +403,10 @@ export default function Home() {
   const selectedRank = Math.max(1, sortedSites.findIndex((site) => site.id === selectedSite.id) + 1);
   const verifiedRiskReduction = verificationResult?.verified
     ? Math.max(0, scoreRisk(analysis.blockage, analysis.litter, rainfall) - risk)
+    : null;
+  const verificationBeforeRisk = scoreRisk(analysis.blockage, analysis.litter, rainfall);
+  const verificationAfterRisk = verificationResult
+    ? scoreRisk(verificationResult.blockage, verificationResult.litter, rainfall)
     : null;
   const dashboardRecords = useMemo(() => sites.map((site) => ({
     ...site,
@@ -1005,7 +1028,7 @@ export default function Home() {
     setMode("surge");
   }
 
-  function loadDemoScenario(scenario: DemoScenario) {
+  function loadDemoScenario(scenario: DemoScenario, shouldScroll = true) {
     const demoWaterway: WaterwayContext = scenario.environmentalDistanceMeters === null
       ? UNAVAILABLE_WATERWAY
       : {
@@ -1064,16 +1087,34 @@ export default function Home() {
     setVerificationResult(null);
     setVerificationStage("idle");
     setCleaned(scenario.status === "Verified clear");
-    window.requestAnimationFrame(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }));
+    if (shouldScroll) window.requestAnimationFrame(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }));
+  }
+
+  function applyJudgeStep(stepIndex: number) {
+    const nextStep = Math.max(0, Math.min(JUDGE_STEPS.length - 1, stepIndex));
+    const step = JUDGE_STEPS[nextStep];
+    setJudgeStep(nextStep);
+    if (step.id === "detect") {
+      loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "litter") ?? DEMO_SCENARIOS[2], false);
+    } else if (step.id === "prioritize") {
+      loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "rainfall") ?? DEMO_SCENARIOS[3], false);
+    } else if (step.id === "act") {
+      loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "waterway") ?? DEMO_SCENARIOS[4], false);
+    }
+    window.requestAnimationFrame(() => {
+      document.getElementById(step.id === "act" ? "queue" : step.id === "verify" || step.id === "close" ? "verify" : "inspect")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function runJudgeDemo() {
     const scenario = DEMO_SCENARIOS.find((item) => item.id === "litter") ?? DEMO_SCENARIOS[2];
     setJudgeMode(true);
+    setJudgeStep(0);
+    setPitchMode(false);
     setComparisonMode("side-by-side");
     setComparisonSplit(50);
-    loadDemoScenario(scenario);
-    window.setTimeout(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }), 120);
+    loadDemoScenario(scenario, false);
+    window.setTimeout(() => document.getElementById("judge-demo")?.scrollIntoView({ behavior: "smooth" }), 120);
   }
 
   function setReviewDecision(site: MapSite, decision: "open" | "approved" | "request-photo") {
@@ -1105,8 +1146,10 @@ export default function Home() {
     window.setTimeout(() => setCopied(false), 1800);
   }
 
+  const activeJudgeStep = JUDGE_STEPS[judgeStep];
+
   return (
-    <main>
+    <main className={pitchMode ? "pitch-mode" : undefined}>
       <header className="topbar">
         <a className="brand" href="#top" aria-label="DrainGuard home">
           <span className="brand-mark">DG</span>
@@ -1114,31 +1157,26 @@ export default function Home() {
         </a>
         <div className="pilot-pill"><span /> Environmental decision-support prototype</div>
         <nav aria-label="Primary navigation">
-          <a href="#inspect">Inspect</a>
-          <a href="#dashboard">Impact dashboard</a>
-          <a href="#queue">Risk map</a>
-          <a href="#method">Validation</a>
+          <a href="#judge-demo">🚀 Judge Demo</a>
+          <a href="#inspect">🔍 Inspect</a>
+          <a href="#queue">📍 Prioritize</a>
+          <a href="#verify">✓ Verify</a>
+          <a href="#dashboard">📊 Impact</a>
         </nav>
+        <button className={`button button-small pitch-toggle ${pitchMode ? "active" : ""}`} onClick={() => setPitchMode((current) => !current)}>{pitchMode ? "Exit pitch mode" : "🎤 Pitch Mode"}</button>
         <button className="button button-small" onClick={() => fileInput.current?.click()}>+ New inspection</button>
       </header>
 
       <section className="hero" id="top">
         <div className="hero-copy">
           <div className="eyebrow"><span>Street-to-waterway monitoring</span><span>Decision support</span></div>
-          <h1>Stop street waste before the next storm moves it <em>downstream.</em></h1>
-          <p>DrainGuard AI helps communities identify blocked, litter-filled storm drains, prioritize inspection using visible evidence and rainfall context, and verify cleanup with before-and-after evidence.</p>
+          <h1>Which drain should we clean before the <em>storm?</em></h1>
+          <p>DrainGuard turns a street photo into explainable cleanup priorities using visible blockage, litter evidence, rainfall context, and verification after cleanup.</p>
           <div className="hero-actions">
-            <a className="button" href="#inspect">Run an inspection <span>→</span></a>
-            <button className="button button-judge" type="button" onClick={runJudgeDemo}>Run judge demo <span>▶</span></button>
-            <a className="text-button" href="#demo">Open two-minute demo <span>↘</span></a>
+            <button className="button" type="button" onClick={runJudgeDemo}>Run the 2-minute judge demo <span>→</span></button>
+            <a className="text-button" href="#inspect">Inspect a drain <span>↘</span></a>
           </div>
-          {judgeMode && (
-            <div className="judge-mode-banner" role="status">
-              <div><span className="judge-live-dot" /> <strong>Judge Mode active</strong></div>
-              <p>Blocked drain → explainable priority → map queue → before/after verification.</p>
-              <button className="text-button" type="button" onClick={() => setJudgeMode(false)}>Exit guided mode ×</button>
-            </div>
-          )}
+          <div className="hero-flow" aria-label="DrainGuard product flow"><span>PHOTO</span><i>→</i><span>AI EVIDENCE</span><i>→</i><span>PRIORITY</span><i>→</i><span>CREW ACTION</span><i>→</i><span>VERIFIED CLEANUP</span></div>
         </div>
         <div className="hero-proof impact-chain" aria-label="Potential street-to-waterway impact chain">
           <div className="proof-head"><span>Why intervene before rainfall?</span><span className="live-dot">Potential pathway</span></div>
@@ -1152,6 +1190,26 @@ export default function Home() {
           <p>DrainGuard intervenes through <strong>Detect → Prioritize → Act → Verify</strong>.</p>
         </div>
       </section>
+
+      {judgeMode && (
+        <section className="judge-narrator" id="judge-demo" aria-labelledby="judge-demo-title">
+          <div className="judge-narrator-topline"><span>🎬 Guided judge demo</span><strong>Controlled demonstration data</strong></div>
+          <div className="judge-stepper" aria-label="Judge demo progress">
+            {JUDGE_STEPS.map((step, index) => (
+              <button key={step.id} type="button" className={index === judgeStep ? "active" : index < judgeStep ? "complete" : ""} onClick={() => applyJudgeStep(index)}><b>{String(index + 1).padStart(2, "0")}</b><span>{step.label}</span></button>
+            ))}
+          </div>
+          <div className="judge-narrator-body">
+            <div><span className="kicker">Step {judgeStep + 1} of {JUDGE_STEPS.length} · {activeJudgeStep.label}</span><h2 id="judge-demo-title">{activeJudgeStep.title}</h2><p>{activeJudgeStep.copy}</p><strong>{activeJudgeStep.hint}</strong></div>
+            <div className="judge-narrator-actions">
+              <button className="button button-outline" type="button" onClick={() => applyJudgeStep(judgeStep - 1)} disabled={judgeStep === 0}>← Previous</button>
+              <button className="button button-dark" type="button" onClick={() => applyJudgeStep(judgeStep + 1)} disabled={judgeStep === JUDGE_STEPS.length - 1}>{judgeStep === JUDGE_STEPS.length - 1 ? "Demo complete ✓" : "Next step →"}</button>
+              <button className="text-button" type="button" onClick={() => applyJudgeStep(0)}>Restart</button>
+              <button className="text-button" type="button" onClick={() => setJudgeMode(false)}>Exit demo ×</button>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="inspection-section" id="inspect">
         <div className="section-intro">
@@ -1289,7 +1347,7 @@ export default function Home() {
         <div className="section-intro compact">
           <div>
             <span className="kicker">02 · Prioritize</span>
-            <h2>One environmental risk map.</h2>
+            <h2>What should crews inspect next?</h2>
           </div>
           <p>Crews see cleanup priority, environmental concern, evidence status, and the recommended action—not simply the newest report.</p>
         </div>
@@ -1328,7 +1386,7 @@ export default function Home() {
             {sortedSites.map((site, index) => (
               <button className={`queue-row ${selectedSite.id === site.id ? "active" : ""}`} key={site.id} onClick={() => selectSite(site)}>
                 <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
-                <span className="queue-place"><strong>{site.place}</strong><small>{site.id} · {site.status}{site.isDemo ? " · Demo scenario" : ""}<br />Environmental concern {site.environmentalRisk ?? "—"}/100</small></span>
+                <span className="queue-place"><strong>{site.place}</strong><small>{site.id} · {site.status}{site.isDemo ? " · Demo scenario" : ""}<br />{queueReason(site)}</small></span>
                 <span className={`queue-risk ${riskBand(site.environmentalRisk ?? site.risk).tone}`} aria-label={`Environmental concern ${site.environmentalRisk ?? site.risk} out of 100`}>{site.status === "Verified clear" ? "✓" : site.status === "Needs review" ? "!" : site.environmentalRisk ?? site.risk}</span>
               </button>
             ))}
@@ -1375,6 +1433,7 @@ export default function Home() {
           <span className="kicker">03 · Verify</span>
           <h2>Close the loop,<br />not just the ticket.</h2>
           <p>After the crew cleans this drain, upload a second photo. The AI compares obstruction and litter with the original evidence before closing the report.</p>
+          <p className="verification-principle"><strong>Detection alone does not prove the problem was solved.</strong> DrainGuard verifies the cleanup evidence.</p>
           <div className="verify-flow" aria-label="Verification steps">
             <span><b>1</b> Upload after photo</span>
             <span><b>2</b> AI compares evidence</span>
@@ -1393,6 +1452,13 @@ export default function Home() {
             {verificationResult?.verified && `Verified: ${verificationResult.sceneMatch ?? 0}% same-drain match and visible obstruction fell by ${verificationResult.reduction ?? 0} points. ${selectedSite.id} is now marked clear.`}
             {verificationResult && !verificationResult.verified && `Human review required. ${verificationFailureReason || "The evidence could not be evaluated reliably."}`}
           </p>
+          {verificationResult && (
+            <div className={`verification-outcome ${verificationResult.verified ? "passed" : "needs-review"}`} aria-label="Cleanup outcome">
+              <div><span>{verificationResult.verified ? "✓ VERIFIED CLEAR" : "! HUMAN REVIEW"}</span><strong>{verificationResult.verified ? "Cleanup evidence passed" : "Cleanup evidence is not conclusive"}</strong></div>
+              <div><small>Priority risk</small><b>{verificationBeforeRisk}/100 → {verificationAfterRisk ?? "—"}/100</b></div>
+              <div><small>Visible litter</small><b>{analysis.litter}% → {verificationResult.litter}%</b></div>
+            </div>
+          )}
           <VerificationChecklist checks={verificationChecks} />
         </div>
         <div className={`verification-card ${cleaned ? "is-clean" : ""}`}>
@@ -1517,6 +1583,7 @@ export default function Home() {
           </div>
           <p className="evaluation-note">Twelve deterministic checks cover ranking, clear evidence, unchanged cleanup, wrong-scene evidence, and non-drain review routing. These verify workflow policy separately from the model audit above.</p>
         </div>
+        <TrustPanel />
         <ValidationPanel />
         <div className="responsibility-note">
           <strong>Responsible use</strong>
