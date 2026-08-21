@@ -392,7 +392,7 @@ export default function Home() {
       ];
     }
     return [
-      { label: "Same scene confidence", detail: `${verificationResult.sceneMatch}% match; ${SAME_DRAIN_THRESHOLD}% required.`, state: verificationResult.sameDrain ? "pass" : "fail" },
+      { label: "Same scene confidence", detail: `${verificationResult.sceneMatch ?? 0}% match; ${SAME_DRAIN_THRESHOLD}% required.`, state: verificationResult.sameDrain ? "pass" : "fail" },
       { label: "Drain evidence", detail: `${verificationResult.drainConfidence ?? 0}% confidence; 60% required.`, state: (verificationResult.drainConfidence ?? 0) >= 60 ? "pass" : "fail" },
       { label: "Obstruction improved", detail: `${verificationResult.reduction}-point reduction; 15 required.`, state: verificationResult.reduction >= 15 ? "pass" : "fail" },
       { label: "Litter threshold", detail: `${verificationResult.litter}/100 residual litter; maximum 48.`, state: verificationResult.litter <= 48 ? "pass" : "fail" },
@@ -1330,7 +1330,7 @@ export default function Home() {
           </button>
           <p className={`verification-message ${verificationResult?.verified ? "passed" : verificationResult ? "review" : ""}`} aria-live="polite">
             {!verificationResult && (verificationFileName ? `Analyzing ${verificationFileName}…` : `Selected report: ${selectedSite.id} · ${selectedSite.place}`)}
-            {verificationResult?.verified && `Verified: ${verificationResult.sceneMatch}% same-drain match and visible obstruction fell by ${verificationResult.reduction} points. ${selectedSite.id} is now marked clear.`}
+            {verificationResult?.verified && `Verified: ${verificationResult.sceneMatch ?? 0}% same-drain match and visible obstruction fell by ${verificationResult.reduction ?? 0} points. ${selectedSite.id} is now marked clear.`}
             {verificationResult && !verificationResult.verified && `Human review required. ${verificationFailureReason || "The evidence could not be evaluated reliably."}`}
           </p>
           <VerificationChecklist checks={verificationChecks} />
@@ -1355,7 +1355,7 @@ export default function Home() {
             <div><span>Before</span><strong>{analysis.blockage}<small>% blocked</small></strong></div>
             <div><span>After</span><strong>{verificationResult?.blockage ?? "—"}<small>{verificationResult ? "% blocked" : " awaiting photo"}</small></strong></div>
             <div><span>Change</span><strong>{verificationResult ? (verificationResult.reduction > 0 ? `−${verificationResult.reduction}` : "0") : "—"}<small> points</small></strong></div>
-            <div><span>Same drain</span><strong>{verificationResult ? verificationResult.sceneMatch : "—"}<small>{verificationResult ? "% match" : " awaiting photo"}</small></strong></div>
+            <div><span>Same drain</span><strong>{verificationResult ? verificationResult.sceneMatch ?? 0 : "—"}<small>{verificationResult ? "% match" : " awaiting photo"}</small></strong></div>
             <div><span>Status</span><strong className={`status-text ${verificationResult && !cleaned ? "needs-review" : ""}`}>{cleaned ? "Verified" : verificationResult ? "Review" : "Open"}</strong></div>
           </div>
         </div>
