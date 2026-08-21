@@ -7,11 +7,13 @@ import {
   ActionPlanner,
   DemoMode,
   EnvironmentalDashboard,
+  JudgeQuestions,
   PriorityExplanation,
   PriorityShockPanel,
   RainfallScenarioExplorer,
   TrustPanel,
   ValidationPanel,
+  WorkflowComparison,
   VerificationChecklist,
   type DemoScenario,
   type VerificationCheck,
@@ -132,12 +134,12 @@ const DEMO_SCENARIOS: DemoScenario[] = [
 ];
 
 const JUDGE_STEPS = [
-  { id: "detect", label: "Detect", title: "A storm is approaching.", copy: "We start with visible evidence from the street: a blocked drain, litter, and the current rainfall scenario.", hint: "Visible evidence first · controlled demonstration data" },
-  { id: "prioritize", label: "Prioritize", title: "AI turns evidence into a decision.", copy: "The same drain is scored with blockage, litter, rainfall, and mapped context so a crew can act on a ranked recommendation.", hint: "Why this one? Every point has a visible reason." },
-  { id: "shock", label: "Priority Shock", title: "The drains did not change. The conditions did.", copy: "Move the rainfall scenario and watch the ranked queue respond using the same evidence and the existing scoring logic.", hint: "Scenario exploration · not a forecast or flood prediction" },
-  { id: "act", label: "Allocate", title: "One crew. A clear action plan.", copy: "With limited capacity, DrainGuard tells the crew where evidence suggests they should go first—and why other reports wait.", hint: "Action Planner · top reports within today's capacity" },
+  { id: "detect", label: "See", title: "A crew receives a report.", copy: "We begin with visible evidence from the street: a blocked drain, litter, and the current rainfall context.", hint: "Visible evidence first · controlled demonstration data" },
+  { id: "prioritize", label: "Understand", title: "How serious is it?", copy: "The system turns blockage, visible litter, and rainfall into an explainable inspection priority.", hint: "Why this one? Every point has a visible reason." },
+  { id: "shock", label: "Adapt", title: "The drains did not change. The conditions did.", copy: "Move the rainfall scenario and watch scores, rankings, and urgency respond using the same evidence.", hint: "Scenario exploration · not a forecast or flood prediction" },
+  { id: "act", label: "Decide", title: "One crew. A clear action plan.", copy: "We cannot inspect everything, so DrainGuard turns priority into an explainable plan within today's capacity.", hint: "Action Planner · top reports within today's capacity" },
   { id: "verify", label: "Verify", title: "Cleanup needs evidence.", copy: "A second image must match the same scene and show meaningful improvement before the report can close.", hint: "Upload an after photo to run the real verification gate" },
-  { id: "close", label: "Close the loop", title: "Detection alone is not the finish line.", copy: "DrainGuard connects detection to verified action. Uncertain evidence stays visible for human review.", hint: "Verified clear appears only when the evidence passes" },
+  { id: "close", label: "Close the loop", title: "Detection alone is not the finish line.", copy: "DrainGuard supports the decision, the action, and the verification. Uncertain evidence stays visible for human review.", hint: "Verified clear appears only when the evidence passes" },
 ] as const;
 
 const UNAVAILABLE_WATERWAY: WaterwayContext = {
@@ -363,6 +365,7 @@ export default function Home() {
   const [verificationFileName, setVerificationFileName] = useState("");
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
   const [verificationStage, setVerificationStage] = useState<"idle" | "loading" | "detecting" | "done">("idle");
+  const [verificationReveal, setVerificationReveal] = useState<"idle" | "checking" | "measuring" | "verified" | "review">("idle");
   const [evidenceBySite, setEvidenceBySite] = useState<Record<string, EvidenceRecord>>({});
   const [reviewDecisions, setReviewDecisions] = useState<Record<string, "open" | "approved" | "request-photo">>({});
   const [judgeMode, setJudgeMode] = useState(false);
@@ -370,6 +373,7 @@ export default function Home() {
   const [pitchMode, setPitchMode] = useState(false);
   const [crewCount, setCrewCount] = useState(1);
   const [inspectionCapacity, setInspectionCapacity] = useState(2);
+  const [rippleVersion, setRippleVersion] = useState(0);
   const [comparisonMode, setComparisonMode] = useState<"side-by-side" | "slider">("side-by-side");
   const [comparisonSplit, setComparisonSplit] = useState(50);
   const [persistenceReady, setPersistenceReady] = useState(false);
@@ -465,6 +469,26 @@ export default function Home() {
     .filter((check) => check.state === "fail")
     .map((check) => `${check.label}: ${check.detail}`)
     .join(" ");
+
+  /* eslint-disable react-hooks/set-state-in-effect -- The staged reveal is a deliberate presentation of one completed verification result. */
+  useEffect(() => {
+    if (!verificationResult) {
+      setVerificationReveal("idle");
+      return;
+    }
+    if (!verificationResult.verified) {
+      setVerificationReveal("review");
+      return;
+    }
+    setVerificationReveal("checking");
+    const measuringTimer = window.setTimeout(() => setVerificationReveal("measuring"), 700);
+    const verifiedTimer = window.setTimeout(() => setVerificationReveal("verified"), 1500);
+    return () => {
+      window.clearTimeout(measuringTimer);
+      window.clearTimeout(verifiedTimer);
+    };
+  }, [verificationResult]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1057,11 +1081,13 @@ export default function Home() {
     setVerificationStage("idle");
     setCleaned(false);
     setStage("idle");
+    setRippleVersion((current) => current + 1);
   }
 
   function applyRainfallScenario(rainfallMm: number) {
     setScenarioRainfall(rainfallMm);
     setMode("surge");
+    setRippleVersion((current) => current + 1);
   }
 
   function loadDemoScenario(scenario: DemoScenario, shouldScroll = true) {
@@ -1123,6 +1149,7 @@ export default function Home() {
     setVerificationResult(null);
     setVerificationStage("idle");
     setCleaned(scenario.status === "Verified clear");
+    setRippleVersion((current) => current + 1);
     if (shouldScroll) window.requestAnimationFrame(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }));
   }
 
@@ -1208,13 +1235,14 @@ export default function Home() {
       <section className="hero" id="top">
         <div className="hero-copy">
           <div className="eyebrow"><span>Street-to-waterway monitoring</span><span>Decision support</span></div>
-          <h1>Which drain should we clean before the <em>storm?</em></h1>
-          <p>DrainGuard turns a street photo into explainable cleanup priorities using visible blockage, litter evidence, rainfall context, and verification after cleanup.</p>
+          <h1>Which drain should your crew inspect before the <em>storm?</em></h1>
+          <p>DrainGuard turns visible street evidence and changing conditions into explainable inspection priorities—then verifies whether cleanup worked.</p>
           <div className="hero-actions">
             <button className="button" type="button" onClick={runJudgeDemo}>Run the 2-minute judge demo <span>→</span></button>
             <a className="text-button" href="#inspect">Inspect a drain <span>↘</span></a>
           </div>
-          <div className="hero-flow" aria-label="DrainGuard product flow"><span>PHOTO</span><i>→</i><span>AI EVIDENCE</span><i>→</i><span>PRIORITY SHOCK</span><i>→</i><span>CREW PLAN</span><i>→</i><span>VERIFIED CLEANUP</span></div>
+          <div className="hero-flow" aria-label="DrainGuard product flow"><span>DETECT</span><i>→</i><span>PRIORITIZE</span><i>→</i><span>ALLOCATE</span><i>→</i><span>ACT</span><i>→</i><span>VERIFY</span></div>
+          <div className="resource-pulse" aria-label="Current operational constraint"><div><strong>{crewCount}</strong><span>{crewCount === 1 ? "crew" : "crews"}</span></div><div><strong>{inspectionCapacity}</strong><span>inspections available</span></div><div><strong>{sortedSites.filter((site) => site.status !== "Verified clear").length}</strong><span>reports competing</span></div><p>A decision has to be made.</p></div>
         </div>
         <div className="hero-proof impact-chain" aria-label="Potential street-to-waterway impact chain">
           <div className="proof-head"><span>Why intervene before rainfall?</span><span className="live-dot">Potential pathway</span></div>
@@ -1316,10 +1344,10 @@ export default function Home() {
             </div>
             <div className="risk-meter"><span style={{ width: `${risk}%` }} /></div>
             <div className="decision-path" aria-label="DrainGuard decision path">
-              <span className="decision-done">1 · Detect</span>
-              <span className="decision-done">2 · Prioritize</span>
+              <span className="decision-done">1 · See</span>
+              <span className="decision-done">2 · Understand</span>
               <span className="decision-done">3 · Adapt</span>
-              <span className={stage === "done" ? "decision-active" : ""}>4 · Allocate</span>
+              <span className={stage === "done" ? "decision-active" : ""}>4 · Decide</span>
               <span className={stage === "done" ? "decision-active" : ""}>5 · Act</span>
               <span className={verificationResult ? "decision-active" : ""}>6 · Verify</span>
             </div>
@@ -1375,8 +1403,11 @@ export default function Home() {
         </div>
         <PriorityExplanation priority={priorityResult} environmental={environmentalResult} action={action} />
         <PriorityShockPanel
-          sites={sites}
+          sites={queueSites}
           rainfall={mode === "surge" ? scenarioRainfall : (selectedSite.rainfall ?? 0)}
+          crews={crewCount}
+          capacity={inspectionCapacity}
+          rippleVersion={rippleVersion}
           onRainfallChange={applyRainfallScenario}
         />
         <RainfallScenarioExplorer scenarios={scenarios} onApply={applyRainfallScenario} />
@@ -1478,8 +1509,9 @@ export default function Home() {
           capacity={inspectionCapacity}
           onCrewsChange={setCrewCount}
           onCapacityChange={setInspectionCapacity}
-          rainfall={mode === "surge" ? scenarioRainfall : (selectedSite.rainfall ?? 0)}
+          rippleVersion={rippleVersion}
         />
+        <WorkflowComparison />
       </section>
 
       <section className="verification-section" id="verify">
@@ -1503,14 +1535,29 @@ export default function Home() {
           </button>
           <p className={`verification-message ${verificationResult?.verified ? "passed" : verificationResult ? "review" : ""}`} aria-live="polite">
             {!verificationResult && (verificationFileName ? `Analyzing ${verificationFileName}…` : `Selected report: ${selectedSite.id} · ${selectedSite.place}`)}
-            {verificationResult?.verified && `Verified: ${verificationResult.sceneMatch ?? 0}% same-drain match and visible obstruction fell by ${verificationResult.reduction ?? 0} points. ${selectedSite.id} is now marked clear.`}
+            {verificationResult?.verified && verificationReveal === "checking" && "Checking the same scene…"}
+            {verificationResult?.verified && verificationReveal === "measuring" && "Measuring improvement…"}
+            {verificationResult?.verified && verificationReveal === "verified" && `Verified: ${verificationResult.sceneMatch ?? 0}% same-drain match and visible obstruction fell by ${verificationResult.reduction ?? 0} points. ${selectedSite.id} is now marked clear.`}
             {verificationResult && !verificationResult.verified && `Human review required. ${verificationFailureReason || "The evidence could not be evaluated reliably."}`}
           </p>
-          {verificationResult && (
+          {verificationResult?.verified && verificationReveal !== "verified" && (
+            <div className="verification-reveal" aria-live="polite">
+              {verificationReveal === "checking" && <><strong>Checking the same scene</strong><span>✓ Same-drain evidence matched</span></>}
+              {verificationReveal === "measuring" && <><strong>Measuring improvement</strong><div><span>Obstruction <b>{analysis.blockage}% → {verificationResult.blockage}%</b></span><span>Visible litter <b>{analysis.litter}% → {verificationResult.litter}%</b></span></div></>}
+            </div>
+          )}
+          {verificationResult && (!verificationResult.verified || verificationReveal === "verified") && (
             <div className={`verification-outcome ${verificationResult.verified ? "passed" : "needs-review"}`} aria-label="Cleanup outcome">
               <div><span>{verificationResult.verified ? "✓ VERIFIED CLEAR" : "! HUMAN REVIEW"}</span><strong>{verificationResult.verified ? "Cleanup evidence passed" : "Cleanup evidence is not conclusive"}</strong></div>
               <div><small>Priority risk</small><b>{verificationBeforeRisk}/100 → {verificationAfterRisk ?? "—"}/100</b></div>
               <div><small>Visible litter</small><b>{analysis.litter}% → {verificationResult.litter}%</b></div>
+            </div>
+          )}
+          {verificationResult?.verified && verificationReveal === "verified" && (
+            <div className="verification-finale" aria-label="DrainGuard final decision story">
+              <p>One photo found the problem.</p><p>Changing conditions changed the decision.</p><p>One crew received the plan.</p><p>One more photo proved it was solved.</p>
+              <strong>DRAINGUARD AI</strong><span>Detect the problem. Decide what to do. Prove it was solved.</span>
+              <b>DETECT → PRIORITIZE → ALLOCATE → ACT → VERIFY</b>
             </div>
           )}
           <VerificationChecklist checks={verificationChecks} />
@@ -1579,7 +1626,7 @@ export default function Home() {
         <div className="method-grid">
           <article><span>01</span><h3>See</h3><p>A research-backed ResNet-50 classifies blockage locally in the browser. A drain-domain gate rejects uncertain photos; COCO-SSD is used only for visible litter.</p></article>
           <article><span>02</span><h3>Score</h3><p>Central configuration drives cleanup priority and a separate environmental decision-support estimate. Missing waterway context lowers coverage instead of becoming a fake value.</p></article>
-          <article><span>03</span><h3>Act</h3><p>The system ranks inspections and generates a concise, traceable field brief for cleanup teams.</p></article>
+          <article><span>03</span><h3>Allocate</h3><p>The system ranks inspections and turns limited capacity into a concise, traceable field plan for cleanup teams.</p></article>
           <article><span>04</span><h3>Verify</h3><p>A normalized scene fingerprint must match the original drain before blockage reduction can close the task. Uncertain pairs go to human review.</p></article>
         </div>
         <div className="model-evaluation-panel" id="model-evaluation">
@@ -1639,6 +1686,7 @@ export default function Home() {
         </div>
         <TrustPanel />
         <ValidationPanel />
+        <JudgeQuestions />
         <div className="responsibility-note">
           <strong>Responsible use</strong>
           <p>DrainGuard supports inspection prioritization. It does not predict floods, measure pollution volume, or replace hydrological and engineering assessment. Scores depend on image quality, rainfall inputs, and available map context.</p>

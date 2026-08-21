@@ -4,8 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { MapSite } from "./DrainMap";
 import type { ExplainedScore } from "../lib/scoring/priority.ts";
 import type { RainfallScenario } from "../lib/scoring/rainfallScenarios.ts";
-import { calculateEnvironmentalRisk } from "../lib/scoring/environmentalRisk.ts";
-import { calculatePriorityScore } from "../lib/scoring/priority.ts";
 
 export type DashboardRecord = MapSite & {
   verifiedReduction?: number;
@@ -208,67 +206,83 @@ function shockLabel(rainfall: number) {
   return "☀ Dry";
 }
 
-function siteWaterway(site: MapSite) {
-  return typeof site.environmentalDistanceMeters === "number"
-    ? {
-      status: "available" as const,
-      distanceMeters: site.environmentalDistanceMeters,
-      source: "OpenStreetMap / Overpass" as const,
-      message: site.environmentalContext ?? `Mapped water feature approximately ${site.environmentalDistanceMeters} m away.`,
-    }
-    : {
-      status: "unavailable" as const,
-      distanceMeters: null,
-      source: "OpenStreetMap / Overpass" as const,
-      message: "Environmental context unavailable. No proximity value was fabricated.",
-    };
+export type ActionPlan = {
+  rankedOpen: MapSite[];
+  selected: MapSite[];
+  nextWave: MapSite[];
+  crewPlans: MapSite[][];
+};
+
+export function buildActionPlan(sites: MapSite[], crews: number, capacity: number): ActionPlan {
+  const rankedOpen = sites
+    .filter((site) => !["Verified clear", "Needs review"].includes(site.status))
+    .sort((a, b) => b.risk - a.risk);
+  const selected = rankedOpen.slice(0, Math.min(capacity, rankedOpen.length));
+  const nextWave = rankedOpen.slice(selected.length);
+  const crewPlans = Array.from({ length: crews }, (_, crewIndex) => selected.filter((_, index) => index % crews === crewIndex));
+  return { rankedOpen, selected, nextWave, crewPlans };
 }
 
 export function PriorityShockPanel({
   sites,
   rainfall,
+  crews,
+  capacity,
+  rippleVersion,
   onRainfallChange,
 }: {
   sites: MapSite[];
   rainfall: number;
+  crews: number;
+  capacity: number;
+  rippleVersion: number;
   onRainfallChange: (value: number) => void;
 }) {
-  const rankedSites = useMemo(() => sites.map((site) => {
-    const priority = calculatePriorityScore({
-      blockage: site.blockage ?? site.risk,
-      litter: site.litter ?? 0,
-      rainfallMm: rainfall,
-      evidenceConfidence: 70,
-    });
-    const environmental = calculateEnvironmentalRisk({
-      blockage: site.blockage ?? site.risk,
-      litter: site.litter ?? 0,
-      rainfallMm: rainfall,
-      waterway: siteWaterway(site),
-      evidenceConfidence: 70,
-    });
-    return { ...site, risk: priority.score, environmentalRisk: environmental.score, rainfall };
-  }).sort((a, b) => b.risk - a.risk), [rainfall, sites]);
+  const rankedSites = useMemo(() => [...sites].sort((a, b) => b.risk - a.risk), [sites]);
+  const currentPlan = useMemo(() => buildActionPlan(rankedSites, crews, capacity), [capacity, crews, rankedSites]);
   const rankSnapshot = useMemo(() => Object.fromEntries(rankedSites.map((site, index) => [site.id, index + 1])), [rankedSites]);
   const scoreSnapshot = useMemo(() => Object.fromEntries(rankedSites.map((site) => [site.id, site.risk])), [rankedSites]);
   const previousRanksRef = useRef<Record<string, number>>({});
   const previousScoresRef = useRef<Record<string, number>>({});
-  const previousRainfallRef = useRef<number | null>(null);
+  const previousPlanRef = useRef<ActionPlan | null>(null);
+  const previousRippleRef = useRef(rippleVersion);
   const [previousRanks, setPreviousRanks] = useState<Record<string, number>>({});
   const [previousScores, setPreviousScores] = useState<Record<string, number>>({});
+  const [previousPlan, setPreviousPlan] = useState<ActionPlan | null>(null);
+  const [ripplePhase, setRipplePhase] = useState<"idle" | "conditions" | "recalculating" | "updated">("idle");
 
   useEffect(() => {
-    if (previousRainfallRef.current !== null && previousRainfallRef.current !== rainfall) {
+    if (previousRippleRef.current !== rippleVersion) {
       setPreviousRanks(previousRanksRef.current);
       setPreviousScores(previousScoresRef.current);
+      setPreviousPlan(previousPlanRef.current);
+      setRipplePhase("conditions");
+      const recalculateTimer = window.setTimeout(() => setRipplePhase("recalculating"), 420);
+      const updatedTimer = window.setTimeout(() => setRipplePhase("updated"), 980);
+      const resetTimer = window.setTimeout(() => setRipplePhase("idle"), 3600);
+      previousRippleRef.current = rippleVersion;
+      previousRanksRef.current = rankSnapshot;
+      previousScoresRef.current = scoreSnapshot;
+      previousPlanRef.current = currentPlan;
+      return () => {
+        window.clearTimeout(recalculateTimer);
+        window.clearTimeout(updatedTimer);
+        window.clearTimeout(resetTimer);
+      };
     }
-    previousRainfallRef.current = rainfall;
     previousRanksRef.current = rankSnapshot;
     previousScoresRef.current = scoreSnapshot;
-  }, [rainfall, rankSnapshot, scoreSnapshot]);
+    previousPlanRef.current = currentPlan;
+  }, [currentPlan, rankSnapshot, rippleVersion, scoreSnapshot]);
 
   const changedCount = rankedSites.filter((site) => previousRanks[site.id] && previousRanks[site.id] !== rankSnapshot[site.id]).length;
   const urgentCount = rankedSites.filter((site) => site.risk >= 80).length;
+  const beforeRanked = previousRanks
+    ? [...rankedSites].sort((a, b) => (previousRanks[a.id] ?? 99) - (previousRanks[b.id] ?? 99)).slice(0, 3)
+    : [];
+  const beforePlan = previousPlan?.selected ?? [];
+  const afterPlan = currentPlan.selected;
+  const planChanged = beforePlan.length > 0 && beforePlan.map((site) => site.id).join(",") !== afterPlan.map((site) => site.id).join(",");
 
   return (
     <section className="priority-shock" aria-labelledby="priority-shock-title">
@@ -283,6 +297,10 @@ export function PriorityShockPanel({
         <div className="shock-scale"><span>0 mm · Dry</span><span>64+ mm · Heavy</span></div>
         <div className="shock-presets">{shockLabels.map((preset) => <button type="button" key={preset.value} className={rainfall === preset.value ? "active" : ""} onClick={() => onRainfallChange(preset.value)}>{preset.label}</button>)}</div>
       </div>
+      {ripplePhase !== "idle" && <div className={`decision-ripple-status ripple-${ripplePhase}`} role="status" aria-live="polite">
+        <strong>{ripplePhase === "conditions" ? "Conditions changed" : ripplePhase === "recalculating" ? "Recalculating inspection priorities" : "⚡ ACTION PLAN UPDATED"}</strong>
+        <span>{ripplePhase === "conditions" ? "The rainfall input is different." : ripplePhase === "recalculating" ? "Only evidence-linked values are being refreshed." : "The queue settled, then the crew plan followed it."}</span>
+      </div>}
       <div className="shock-summary" aria-live="polite">
         <div><span>Current condition</span><strong>{shockLabel(rainfall)}</strong><small>{rainfall} mm selected</small></div>
         <div><span>Urgent inspection</span><strong>{urgentCount}</strong><small>reports at 80+ priority</small></div>
@@ -310,6 +328,16 @@ export function PriorityShockPanel({
           );
         })}
       </div>
+      {previousRanks && Object.keys(previousRanks).length > 0 && rippleVersion > 0 && (
+        <div className="decision-compare" aria-label="Before and after decision comparison">
+          <div className="decision-compare-head"><span>Before / after decision</span><strong>Same reports. Same crew. New conditions.</strong></div>
+          <div className="decision-compare-grid">
+            <div><small>Before conditions change</small><h4>Priority ranking</h4>{beforeRanked.map((site) => <p key={site.id}><b>#{previousRanks[site.id]}</b><span>{site.id}</span><em>{previousScores[site.id] ?? site.risk}</em></p>)}<h4>Crew plan</h4><p className="decision-plan">{beforePlan.length ? beforePlan.map((site) => site.id).join(" → ") : "No dispatchable reports"}</p></div>
+            <div className="decision-compare-after"><small>After conditions change</small><h4>Priority ranking</h4>{rankedSites.slice(0, 3).map((site, index) => <p key={site.id}><b>#{index + 1}</b><span>{site.id}</span><em>{site.risk}</em></p>)}<h4>Crew plan</h4><p className="decision-plan">{afterPlan.length ? afterPlan.map((site) => site.id).join(" → ") : "No dispatchable reports"}</p></div>
+          </div>
+          {planChanged && <strong className="decision-ripple-callout">{crews} {crews === 1 ? "crew" : "crews"}. {afterPlan.length} inspections. Different decision.</strong>}
+        </div>
+      )}
     </section>
   );
 }
@@ -320,27 +348,26 @@ export function ActionPlanner({
   capacity,
   onCrewsChange,
   onCapacityChange,
-  rainfall,
+  rippleVersion,
 }: {
   sites: MapSite[];
   crews: number;
   capacity: number;
   onCrewsChange: (value: number) => void;
   onCapacityChange: (value: number) => void;
-  rainfall: number;
+  rippleVersion: number;
 }) {
-  const rankedOpen = useMemo(() => sites.filter((site) => !["Verified clear", "Needs review"].includes(site.status)).sort((a, b) => b.risk - a.risk), [sites]);
-  const selected = rankedOpen.slice(0, Math.min(capacity, rankedOpen.length));
-  const nextWave = rankedOpen.slice(selected.length);
-  const crewPlans = Array.from({ length: crews }, (_, crewIndex) => selected.filter((_, index) => index % crews === crewIndex));
-  const planSignature = `${rainfall}:${crewPlans.map((crew) => crew.map((site) => site.id).join(",")).join("|")}`;
-  const [previousPlanSignature, setPreviousPlanSignature] = useState("");
-  const planChanged = previousPlanSignature !== "" && previousPlanSignature !== planSignature;
+  const plan = useMemo(() => buildActionPlan(sites, crews, capacity), [capacity, crews, sites]);
+  const { rankedOpen, selected, nextWave, crewPlans } = plan;
+  const [planChanged, setPlanChanged] = useState(false);
   useEffect(() => {
-    // Store the last visible plan so the next scenario transition can be called out.
+    if (rippleVersion === 0) return;
+    // Keep the transition visible long enough for the queue and plan to be read together.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPreviousPlanSignature(planSignature);
-  }, [planSignature]);
+    setPlanChanged(true);
+    const timer = window.setTimeout(() => setPlanChanged(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [rippleVersion]);
   const lastSelected = selected[selected.length - 1];
 
   return (
@@ -358,6 +385,39 @@ export function ActionPlanner({
         <div className="planner-next"><div className="planner-column-head"><span>Monitor / next wave</span><strong>{nextWave.length} outside capacity</strong></div>{nextWave.length ? nextWave.map((site, index) => <details className="why-not" key={site.id}><summary><span>#{selected.length + index + 1}</span><strong>{site.id}</strong><small>{site.place}</small><em>{site.risk}</em></summary><div><p><b>Why is this not in today&apos;s plan?</b> This report remains open, but capacity is allocated to higher-priority evidence.</p><table><tbody><tr><th>Factor</th><th>Last selected</th><th>{site.id}</th></tr><tr><td>Blockage</td><td>{lastSelected?.blockage ?? "—"}</td><td>{site.blockage ?? "—"}</td></tr><tr><td>Rainfall</td><td>{lastSelected?.rainfall ?? "—"} mm</td><td>{site.rainfall ?? "—"} mm</td></tr><tr><td>Litter</td><td>{lastSelected?.litter ?? "—"}</td><td>{site.litter ?? "—"}</td></tr><tr><td>Priority</td><td>{lastSelected?.risk ?? "—"}</td><td>{site.risk}</td></tr></tbody></table></div></details>) : <p className="plan-empty">All open reports fit within today&apos;s capacity.</p>}</div>
       </div>
       <div className="decision-timeline"><span>Controlled demo timeline</span><div><b>09:00</b> Report received</div><i>→</i><div><b>09:01</b> Evidence detected</div><i>→</i><div><b>09:02</b> Rainfall scenario updated</div><i>→</i><div><b>09:03</b> Added to crew plan</div><i>→</i><div><b>✓</b> Verified clear after cleanup evidence</div></div>
+    </section>
+  );
+}
+
+export function WorkflowComparison() {
+  const rows = [
+    ["Someone reports a problem", "AI evaluates visible evidence"],
+    ["Reports remain in a queue", "Conditions influence priority"],
+    ["Static task ordering", "Priorities adapt"],
+    ["Teams choose manually", "Limited capacity gets an action plan"],
+    ["Task marked complete", "Cleanup evidence is verified"],
+  ];
+  return (
+    <section className="workflow-comparison" aria-labelledby="workflow-comparison-title">
+      <div className="workflow-comparison-head"><div><span className="kicker">Why DrainGuard?</span><h3 id="workflow-comparison-title">Most systems stop at reporting.</h3></div><strong>DrainGuard closes the decision loop.</strong></div>
+      <div className="workflow-comparison-table"><div className="workflow-comparison-labels"><span>Basic / static reporting workflow</span><span>DrainGuard workflow</span></div>{rows.map(([basic, drain]) => <div className="workflow-comparison-row" key={basic}><span>{basic}</span><strong>{drain}</strong></div>)}</div>
+      <p className="workflow-comparison-close"><strong>Detection is not the finish line.</strong> Verified action is.</p>
+    </section>
+  );
+}
+
+export function JudgeQuestions() {
+  const questions = [
+    ["Is this flood prediction?", "No. DrainGuard supports inspection decisions using visible evidence, rainfall inputs or scenarios, and available environmental context. It does not model flooding."],
+    ["Does the system measure pollution?", "No. Visible litter is an evidence signal; DrainGuard does not claim to measure pollution volume."],
+    ["Is the AI always correct?", "No. Uncertain evidence can be routed to human review, and validation limitations are explicitly documented."],
+    ["Does this optimize driving routes?", "No. The Action Planner allocates inspection capacity by priority. It does not claim route or travel-time optimization without routing data."],
+    ["What makes DrainGuard different?", "It connects Evidence → Priority → Resource decision → Action → Verification in one traceable workflow."],
+  ];
+  return (
+    <section className="judge-questions" aria-labelledby="judge-questions-title">
+      <div><span className="kicker">Judge questions</span><h3 id="judge-questions-title">Clear answers for the hard questions.</h3></div>
+      <div className="judge-question-list">{questions.map(([question, answer]) => <details key={question}><summary>{question}<span>+</span></summary><p>{answer}</p></details>)}</div>
     </section>
   );
 }
