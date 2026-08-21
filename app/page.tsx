@@ -1214,7 +1214,7 @@ export default function Home() {
             <button className="button" type="button" onClick={runJudgeDemo}>Run the 2-minute judge demo <span>→</span></button>
             <a className="text-button" href="#inspect">Inspect a drain <span>↘</span></a>
           </div>
-          <div className="hero-flow" aria-label="DrainGuard product flow"><span>PHOTO</span><i>→</i><span>AI EVIDENCE</span><i>→</i><span>PRIORITY</span><i>→</i><span>CREW ACTION</span><i>→</i><span>VERIFIED CLEANUP</span></div>
+          <div className="hero-flow" aria-label="DrainGuard product flow"><span>PHOTO</span><i>→</i><span>AI EVIDENCE</span><i>→</i><span>PRIORITY SHOCK</span><i>→</i><span>CREW PLAN</span><i>→</i><span>VERIFIED CLEANUP</span></div>
         </div>
         <div className="hero-proof impact-chain" aria-label="Potential street-to-waterway impact chain">
           <div className="proof-head"><span>Why intervene before rainfall?</span><span className="live-dot">Potential pathway</span></div>
@@ -1225,7 +1225,7 @@ export default function Home() {
             <li><b>04</b><span>Potential transport toward waterways</span></li>
             <li><b>05</b><span>Environmental concern</span></li>
           </ol>
-          <p>DrainGuard intervenes through <strong>Detect → Prioritize → Act → Verify</strong>.</p>
+          <p>DrainGuard intervenes through <strong>Detect → Prioritize → Priority Shock → Allocate → Verify → Close</strong>.</p>
         </div>
       </section>
 
@@ -1648,7 +1648,7 @@ export default function Home() {
 
       <footer>
         <div className="brand footer-brand"><span className="brand-mark">DG</span><span>DrainGuard <i>AI</i></span></div>
-        <p>Detect. Prioritize. Act. Verify.</p>
+        <p>Detect. Prioritize. Adapt. Allocate. Verify. Close.</p>
         <div><a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Weather: Open-Meteo</a><a href="https://doi.org/10.17864/1947.000498" target="_blank" rel="noreferrer">Model/data: U. Reading</a><a href="https://www.michigan.gov/egle/about/organization/water-resources/stormwater" target="_blank" rel="noreferrer">Sample: Michigan EGLE</a></div>
       </footer>
 
