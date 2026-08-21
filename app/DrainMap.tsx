@@ -131,6 +131,7 @@ export function DrainMap({
         popup.append(photo);
       }
       popup.append(document.createTextNode(site.place), document.createElement("br"));
+      popup.append(document.createTextNode(`Coordinates ${site.lat.toFixed(4)}, ${site.lon.toFixed(4)}`), document.createElement("br"));
       popup.append(document.createTextNode(`Cleanup priority ${site.risk}/100`), document.createElement("br"));
       popup.append(document.createTextNode(`Environmental concern ${environmentalRisk}/100`), document.createElement("br"));
       popup.append(document.createTextNode(`Blockage ${site.blockage ?? "—"}/100 · litter ${site.litter ?? "—"}/100`), document.createElement("br"));
