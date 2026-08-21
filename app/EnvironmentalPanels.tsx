@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MapSite } from "./DrainMap";
 import type { ExplainedScore } from "../lib/scoring/priority.ts";
 import type { RainfallScenario } from "../lib/scoring/rainfallScenarios.ts";
+import { calculateEnvironmentalRisk } from "../lib/scoring/environmentalRisk.ts";
+import { calculatePriorityScore } from "../lib/scoring/priority.ts";
 
 export type DashboardRecord = MapSite & {
   verifiedReduction?: number;
@@ -188,6 +190,174 @@ export function EnvironmentalDashboard({ records }: { records: DashboardRecord[]
           </div>
         </>
       )}
+    </section>
+  );
+}
+
+const shockLabels = [
+  { value: 0, label: "☀ Dry" },
+  { value: 8, label: "🌦 Light rain" },
+  { value: 24, label: "🌧 Moderate rain" },
+  { value: 64, label: "⛈ Heavy rain" },
+];
+
+function shockLabel(rainfall: number) {
+  if (rainfall >= 48) return "⛈ Heavy rain";
+  if (rainfall >= 16) return "🌧 Moderate rain";
+  if (rainfall > 0) return "🌦 Light rain";
+  return "☀ Dry";
+}
+
+function siteWaterway(site: MapSite) {
+  return typeof site.environmentalDistanceMeters === "number"
+    ? {
+      status: "available" as const,
+      distanceMeters: site.environmentalDistanceMeters,
+      source: "OpenStreetMap / Overpass" as const,
+      message: site.environmentalContext ?? `Mapped water feature approximately ${site.environmentalDistanceMeters} m away.`,
+    }
+    : {
+      status: "unavailable" as const,
+      distanceMeters: null,
+      source: "OpenStreetMap / Overpass" as const,
+      message: "Environmental context unavailable. No proximity value was fabricated.",
+    };
+}
+
+export function PriorityShockPanel({
+  sites,
+  rainfall,
+  onRainfallChange,
+}: {
+  sites: MapSite[];
+  rainfall: number;
+  onRainfallChange: (value: number) => void;
+}) {
+  const rankedSites = useMemo(() => sites.map((site) => {
+    const priority = calculatePriorityScore({
+      blockage: site.blockage ?? site.risk,
+      litter: site.litter ?? 0,
+      rainfallMm: rainfall,
+      evidenceConfidence: 70,
+    });
+    const environmental = calculateEnvironmentalRisk({
+      blockage: site.blockage ?? site.risk,
+      litter: site.litter ?? 0,
+      rainfallMm: rainfall,
+      waterway: siteWaterway(site),
+      evidenceConfidence: 70,
+    });
+    return { ...site, risk: priority.score, environmentalRisk: environmental.score, rainfall };
+  }).sort((a, b) => b.risk - a.risk), [rainfall, sites]);
+  const rankSnapshot = useMemo(() => Object.fromEntries(rankedSites.map((site, index) => [site.id, index + 1])), [rankedSites]);
+  const scoreSnapshot = useMemo(() => Object.fromEntries(rankedSites.map((site) => [site.id, site.risk])), [rankedSites]);
+  const previousRanksRef = useRef<Record<string, number>>({});
+  const previousScoresRef = useRef<Record<string, number>>({});
+  const previousRainfallRef = useRef<number | null>(null);
+  const [previousRanks, setPreviousRanks] = useState<Record<string, number>>({});
+  const [previousScores, setPreviousScores] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    if (previousRainfallRef.current !== null && previousRainfallRef.current !== rainfall) {
+      setPreviousRanks(previousRanksRef.current);
+      setPreviousScores(previousScoresRef.current);
+    }
+    previousRainfallRef.current = rainfall;
+    previousRanksRef.current = rankSnapshot;
+    previousScoresRef.current = scoreSnapshot;
+  }, [rainfall, rankSnapshot, scoreSnapshot]);
+
+  const changedCount = rankedSites.filter((site) => previousRanks[site.id] && previousRanks[site.id] !== rankSnapshot[site.id]).length;
+  const urgentCount = rankedSites.filter((site) => site.risk >= 80).length;
+
+  return (
+    <section className="priority-shock" aria-labelledby="priority-shock-title">
+      <div className="priority-shock-head">
+        <div><span className="kicker">⚡ Priority Shock</span><h3 id="priority-shock-title">Same drains. Different conditions. Different priorities.</h3></div>
+        <strong>{shockLabel(rainfall)}</strong>
+      </div>
+      <p className="priority-shock-note">Change the rainfall scenario and watch the existing scoring logic update priority, environmental concern, and the ranked queue. This is scenario exploration for decision support—not a weather forecast or flood prediction.</p>
+      <div className="shock-control">
+        <div className="shock-control-label"><span>Rainfall input</span><strong>{rainfall} mm / 24h</strong></div>
+        <input type="range" min="0" max="64" step="1" value={rainfall} onChange={(event) => onRainfallChange(Number(event.target.value))} aria-label="Priority Shock rainfall input" />
+        <div className="shock-scale"><span>0 mm · Dry</span><span>64+ mm · Heavy</span></div>
+        <div className="shock-presets">{shockLabels.map((preset) => <button type="button" key={preset.value} className={rainfall === preset.value ? "active" : ""} onClick={() => onRainfallChange(preset.value)}>{preset.label}</button>)}</div>
+      </div>
+      <div className="shock-summary" aria-live="polite">
+        <div><span>Current condition</span><strong>{shockLabel(rainfall)}</strong><small>{rainfall} mm selected</small></div>
+        <div><span>Urgent inspection</span><strong>{urgentCount}</strong><small>reports at 80+ priority</small></div>
+        <div><span>Priority movement</span><strong>{changedCount ? `${changedCount} changed` : "Ready"}</strong><small>{changedCount ? "conditions changed the queue" : "move rainfall to compare"}</small></div>
+      </div>
+      <div className="shock-queue" aria-label="Priority Shock ranked queue">
+        {rankedSites.map((site) => {
+          const rank = rankSnapshot[site.id];
+          const oldRank = previousRanks[site.id];
+          const movement = oldRank ? oldRank - rank : 0;
+          const oldScore = previousScores[site.id];
+          return (
+            <details className="shock-report" key={site.id} open={rank === 1}>
+              <summary>
+                <span className="shock-rank">#{rank}</span>
+                <span className="shock-place"><strong>{site.id}</strong><small>{site.place}</small></span>
+                <span className="shock-priority"><b>{site.risk}</b><small>/100</small></span>
+                <span className={`rank-movement ${movement > 0 ? "up" : movement < 0 ? "down" : "steady"}`}>{movement > 0 ? `↑ ${movement}` : movement < 0 ? `↓ ${Math.abs(movement)}` : "—"}</span>
+              </summary>
+              <div className="shock-report-detail">
+                <p>{site.status === "Verified clear" ? "Cleanup already verified; this report remains visible for routine monitoring." : (site.blockage ?? 0) >= 70 ? "Severe visible obstruction remains the strongest priority contributor." : "Visible evidence remains lower than the reports above it."}</p>
+                {oldRank && oldRank !== rank && <div className="shock-change"><strong>Why did this change?</strong><span>Rank #{oldRank} → #{rank} · priority {oldScore ?? "—"} → {site.risk}</span><small>The visible blockage and litter stayed tied to this report; the selected rainfall scenario changed the urgency component.</small></div>}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+export function ActionPlanner({
+  sites,
+  crews,
+  capacity,
+  onCrewsChange,
+  onCapacityChange,
+  rainfall,
+}: {
+  sites: MapSite[];
+  crews: number;
+  capacity: number;
+  onCrewsChange: (value: number) => void;
+  onCapacityChange: (value: number) => void;
+  rainfall: number;
+}) {
+  const rankedOpen = useMemo(() => sites.filter((site) => !["Verified clear", "Needs review"].includes(site.status)).sort((a, b) => b.risk - a.risk), [sites]);
+  const selected = rankedOpen.slice(0, Math.min(capacity, rankedOpen.length));
+  const nextWave = rankedOpen.slice(selected.length);
+  const crewPlans = Array.from({ length: crews }, (_, crewIndex) => selected.filter((_, index) => index % crews === crewIndex));
+  const planSignature = `${rainfall}:${crewPlans.map((crew) => crew.map((site) => site.id).join(",")).join("|")}`;
+  const [previousPlanSignature, setPreviousPlanSignature] = useState("");
+  const planChanged = previousPlanSignature !== "" && previousPlanSignature !== planSignature;
+  useEffect(() => {
+    // Store the last visible plan so the next scenario transition can be called out.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPreviousPlanSignature(planSignature);
+  }, [planSignature]);
+  const lastSelected = selected[selected.length - 1];
+
+  return (
+    <section className="action-planner" aria-labelledby="action-planner-title">
+      <div className="action-planner-head"><div><span className="kicker">🚚 Action Planner</span><h3 id="action-planner-title">If you only have one crew, where should it go?</h3></div><strong>{selected.length} of {rankedOpen.length} reports planned</strong></div>
+      <p className="action-planner-note">Transparent capacity allocation—not route optimization. DrainGuard selects the highest-priority dispatchable reports using the current scenario and distributes them across available crews. Human-review cases stay with the review queue.</p>
+      <div className="planner-controls">
+        <label><span>Available crews</span><select value={crews} onChange={(event) => onCrewsChange(Number(event.target.value))}>{[1, 2, 3].map((value) => <option value={value} key={value}>{value} {value === 1 ? "crew" : "crews"}</option>)}</select></label>
+        <label><span>Inspection capacity</span><select value={capacity} onChange={(event) => onCapacityChange(Number(event.target.value))}>{[2, 4, 6].map((value) => <option value={value} key={value}>{value} reports</option>)}</select></label>
+        <div className="planner-capacity"><span>Today&apos;s capacity</span><strong>{selected.length} / {Math.min(capacity, rankedOpen.length)}</strong><small>top-ranked open reports</small></div>
+      </div>
+      {planChanged && <div className="plan-updated" role="status">⚡ Action plan updated <span>Selected reports changed with the current priority scenario.</span></div>}
+      <div className="planner-columns">
+        <div className="planner-now"><div className="planner-column-head"><span>Recommended now</span><strong>Within capacity</strong></div>{crewPlans.map((crew, index) => <div className="crew-plan" key={index}><span className="crew-label">Crew {index + 1}</span>{crew.length ? crew.map((site, stop) => <div className="plan-row" key={site.id}><b>{stop + 1}</b><span><strong>{site.id}</strong><small>{site.place}</small></span><em>{site.risk} priority</em></div>) : <p className="plan-empty">No report assigned.</p>}</div>)}</div>
+        <div className="planner-next"><div className="planner-column-head"><span>Monitor / next wave</span><strong>{nextWave.length} outside capacity</strong></div>{nextWave.length ? nextWave.map((site, index) => <details className="why-not" key={site.id}><summary><span>#{selected.length + index + 1}</span><strong>{site.id}</strong><small>{site.place}</small><em>{site.risk}</em></summary><div><p><b>Why is this not in today&apos;s plan?</b> This report remains open, but capacity is allocated to higher-priority evidence.</p><table><tbody><tr><th>Factor</th><th>Last selected</th><th>{site.id}</th></tr><tr><td>Blockage</td><td>{lastSelected?.blockage ?? "—"}</td><td>{site.blockage ?? "—"}</td></tr><tr><td>Rainfall</td><td>{lastSelected?.rainfall ?? "—"} mm</td><td>{site.rainfall ?? "—"} mm</td></tr><tr><td>Litter</td><td>{lastSelected?.litter ?? "—"}</td><td>{site.litter ?? "—"}</td></tr><tr><td>Priority</td><td>{lastSelected?.risk ?? "—"}</td><td>{site.risk}</td></tr></tbody></table></div></details>) : <p className="plan-empty">All open reports fit within today&apos;s capacity.</p>}</div>
+      </div>
+      <div className="decision-timeline"><span>Controlled demo timeline</span><div><b>09:00</b> Report received</div><i>→</i><div><b>09:01</b> Evidence detected</div><i>→</i><div><b>09:02</b> Rainfall scenario updated</div><i>→</i><div><b>09:03</b> Added to crew plan</div><i>→</i><div><b>✓</b> Verified clear after cleanup evidence</div></div>
     </section>
   );
 }

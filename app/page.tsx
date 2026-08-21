@@ -4,9 +4,11 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "re
 import NextImage from "next/image";
 import { DrainMap, type MapSite } from "./DrainMap";
 import {
+  ActionPlanner,
   DemoMode,
   EnvironmentalDashboard,
   PriorityExplanation,
+  PriorityShockPanel,
   RainfallScenarioExplorer,
   TrustPanel,
   ValidationPanel,
@@ -132,7 +134,8 @@ const DEMO_SCENARIOS: DemoScenario[] = [
 const JUDGE_STEPS = [
   { id: "detect", label: "Detect", title: "A storm is approaching.", copy: "We start with visible evidence from the street: a blocked drain, litter, and the current rainfall scenario.", hint: "Visible evidence first · controlled demonstration data" },
   { id: "prioritize", label: "Prioritize", title: "AI turns evidence into a decision.", copy: "The same drain is scored with blockage, litter, rainfall, and mapped context so a crew can act on a ranked recommendation.", hint: "Why this one? Every point has a visible reason." },
-  { id: "act", label: "Act", title: "Crews see what to inspect next.", copy: "The report enters a queue sorted by cleanup priority instead of waiting behind the newest complaint.", hint: "One crew · send them to the highest-priority report" },
+  { id: "shock", label: "Priority Shock", title: "The drains did not change. The conditions did.", copy: "Move the rainfall scenario and watch the ranked queue respond using the same evidence and the existing scoring logic.", hint: "Scenario exploration · not a forecast or flood prediction" },
+  { id: "act", label: "Allocate", title: "One crew. A clear action plan.", copy: "With limited capacity, DrainGuard tells the crew where evidence suggests they should go first—and why other reports wait.", hint: "Action Planner · top reports within today's capacity" },
   { id: "verify", label: "Verify", title: "Cleanup needs evidence.", copy: "A second image must match the same scene and show meaningful improvement before the report can close.", hint: "Upload an after photo to run the real verification gate" },
   { id: "close", label: "Close the loop", title: "Detection alone is not the finish line.", copy: "DrainGuard connects detection to verified action. Uncertain evidence stays visible for human review.", hint: "Verified clear appears only when the evidence passes" },
 ] as const;
@@ -365,6 +368,8 @@ export default function Home() {
   const [judgeMode, setJudgeMode] = useState(false);
   const [judgeStep, setJudgeStep] = useState(0);
   const [pitchMode, setPitchMode] = useState(false);
+  const [crewCount, setCrewCount] = useState(1);
+  const [inspectionCapacity, setInspectionCapacity] = useState(2);
   const [comparisonMode, setComparisonMode] = useState<"side-by-side" | "slider">("side-by-side");
   const [comparisonSplit, setComparisonSplit] = useState(50);
   const [persistenceReady, setPersistenceReady] = useState(false);
@@ -393,13 +398,39 @@ export default function Home() {
     waterway: waterwayContext,
     evidenceConfidence: effectiveAnalysis.confidence,
   }), [effectiveAnalysis.blockage, effectiveAnalysis.confidence, effectiveAnalysis.litter, waterwayContext]);
+  const queueSites = useMemo(() => sites.map((site) => {
+    const rainfallForSite = mode === "surge" ? scenarioRainfall : (site.rainfall ?? null);
+    const priority = calculatePriorityScore({
+      blockage: site.blockage ?? site.risk,
+      litter: site.litter ?? 0,
+      rainfallMm: rainfallForSite,
+      evidenceConfidence: 70,
+    });
+    const environmental = calculateEnvironmentalRisk({
+      blockage: site.blockage ?? site.risk,
+      litter: site.litter ?? 0,
+      rainfallMm: rainfallForSite,
+      waterway: waterwayContextForSite(site),
+      evidenceConfidence: 70,
+    });
+    const preservedStatus = ["Needs review", "Verified clear"].includes(site.status);
+    return {
+      ...site,
+      risk: priority.score,
+      environmentalRisk: environmental.score,
+      environmentalLevel: environmental.level,
+      rainfall: rainfallForSite ?? undefined,
+      status: preservedStatus ? site.status : priorityAction(priority.score),
+      recommendedAction: recommendedAction(priority.score, site.status === "Verified clear"),
+    };
+  }), [mode, scenarioRainfall, sites]);
   const risk = priorityResult.score;
   const band = riskBand(risk);
   const action = !cleaned && stage === "done" && (effectiveAnalysis.drainConfidence ?? effectiveAnalysis.confidence) < 60
     ? "Human review required before dispatch."
     : recommendedAction(risk, cleaned);
-  const sortedSites = useMemo(() => [...sites].sort((a, b) => b.risk - a.risk), [sites]);
-  const reviewSites = useMemo(() => sites.filter((site) => site.status === "Needs review"), [sites]);
+  const sortedSites = useMemo(() => [...queueSites].sort((a, b) => b.risk - a.risk), [queueSites]);
+  const reviewSites = useMemo(() => queueSites.filter((site) => site.status === "Needs review"), [queueSites]);
   const selectedRank = Math.max(1, sortedSites.findIndex((site) => site.id === selectedSite.id) + 1);
   const verifiedRiskReduction = verificationResult?.verified
     ? Math.max(0, scoreRisk(analysis.blockage, analysis.litter, rainfall) - risk)
@@ -408,12 +439,12 @@ export default function Home() {
   const verificationAfterRisk = verificationResult
     ? scoreRisk(verificationResult.blockage, verificationResult.litter, rainfall)
     : null;
-  const dashboardRecords = useMemo(() => sites.map((site) => ({
+  const dashboardRecords = useMemo(() => queueSites.map((site) => ({
     ...site,
     verifiedReduction: evidenceBySite[site.id]?.verification?.verified
       ? evidenceBySite[site.id].verification?.reduction
       : undefined,
-  })), [evidenceBySite, sites]);
+  })), [evidenceBySite, queueSites]);
   const verificationChecks = useMemo<VerificationCheck[]>(() => {
     if (!verificationResult) {
       return [
@@ -650,6 +681,11 @@ export default function Home() {
       setImageError("This image could not be decoded. Try exporting it as JPG or PNG and upload again.");
       setStage("idle");
     }
+  }
+
+  function selectQueueSite(site: MapSite) {
+    const persistedSite = sites.find((item) => item.id === site.id);
+    selectSite(persistedSite ?? site);
   }
 
   async function chooseVerificationImage(event: ChangeEvent<HTMLInputElement>) {
@@ -1097,6 +1133,8 @@ export default function Home() {
     if (step.id === "detect") {
       loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "litter") ?? DEMO_SCENARIOS[2], false);
     } else if (step.id === "prioritize") {
+      loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "litter") ?? DEMO_SCENARIOS[2], false);
+    } else if (step.id === "shock") {
       loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "rainfall") ?? DEMO_SCENARIOS[3], false);
     } else if (step.id === "act") {
       loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "waterway") ?? DEMO_SCENARIOS[4], false);
@@ -1280,8 +1318,10 @@ export default function Home() {
             <div className="decision-path" aria-label="DrainGuard decision path">
               <span className="decision-done">1 · Detect</span>
               <span className="decision-done">2 · Prioritize</span>
-              <span className={stage === "done" ? "decision-active" : ""}>3 · Act</span>
-              <span className={verificationResult ? "decision-active" : ""}>4 · Verify</span>
+              <span className="decision-done">3 · Adapt</span>
+              <span className={stage === "done" ? "decision-active" : ""}>4 · Allocate</span>
+              <span className={stage === "done" ? "decision-active" : ""}>5 · Act</span>
+              <span className={verificationResult ? "decision-active" : ""}>6 · Verify</span>
             </div>
 
             <div className="signal-list">
@@ -1334,6 +1374,11 @@ export default function Home() {
           </aside>
         </div>
         <PriorityExplanation priority={priorityResult} environmental={environmentalResult} action={action} />
+        <PriorityShockPanel
+          sites={sites}
+          rainfall={mode === "surge" ? scenarioRainfall : (selectedSite.rainfall ?? 0)}
+          onRainfallChange={applyRainfallScenario}
+        />
         <RainfallScenarioExplorer scenarios={scenarios} onApply={applyRainfallScenario} />
       </section>
 
@@ -1378,13 +1423,13 @@ export default function Home() {
         <div className="queue-grid">
           <div className="map-card" aria-label="Priority map of inspected drains">
             <div className="map-top"><span>{selectedSite.place}</span><span>{sites.length} mapped reports · symbols + labels</span></div>
-            <DrainMap sites={sites} selectedId={selectedSite.id} onSelect={selectSite} />
+            <DrainMap sites={queueSites} selectedId={selectedSite.id} onSelect={selectQueueSite} />
           </div>
 
           <div className="queue-card">
             <div className="queue-heading"><span>Cleanup queue</span><span>Sorted by cleanup priority</span></div>
             {sortedSites.map((site, index) => (
-              <button className={`queue-row ${selectedSite.id === site.id ? "active" : ""}`} key={site.id} onClick={() => selectSite(site)}>
+              <button className={`queue-row ${selectedSite.id === site.id ? "active" : ""}`} key={site.id} onClick={() => selectQueueSite(site)}>
                 <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
                 <span className="queue-place"><strong>{site.place}</strong><small>{site.id} · {site.status}{site.isDemo ? " · Demo scenario" : ""}<br />{queueReason(site)}</small></span>
                 <span className={`queue-risk ${riskBand(site.environmentalRisk ?? site.risk).tone}`} aria-label={`Environmental concern ${site.environmentalRisk ?? site.risk} out of 100`}>{site.status === "Verified clear" ? "✓" : site.status === "Needs review" ? "!" : site.environmentalRisk ?? site.risk}</span>
@@ -1426,6 +1471,15 @@ export default function Home() {
             })}
           </div>
         </div>
+
+        <ActionPlanner
+          sites={sortedSites}
+          crews={crewCount}
+          capacity={inspectionCapacity}
+          onCrewsChange={setCrewCount}
+          onCapacityChange={setInspectionCapacity}
+          rainfall={mode === "surge" ? scenarioRainfall : (selectedSite.rainfall ?? 0)}
+        />
       </section>
 
       <section className="verification-section" id="verify">
