@@ -154,7 +154,7 @@ export function EnvironmentalDashboard({ records }: { records: DashboardRecord[]
   return (
     <section className="impact-dashboard" id="dashboard" aria-labelledby="dashboard-title">
       <div className="dashboard-heading">
-        <div><span className="kicker">Environmental impact dashboard</span><h2 id="dashboard-title">Evidence, not invented impact.</h2></div>
+        <div><span className="kicker">Live impact story</span><h2 id="dashboard-title">What changed because we prioritized these drains?</h2></div>
         <div className="dataset-toggle" role="group" aria-label="Dashboard dataset">
           <button className={!showDemo ? "active" : ""} type="button" onClick={() => setShowDemo(false)}>Live reports</button>
           <button className={showDemo ? "active" : ""} type="button" onClick={() => setShowDemo(true)}>Demo preview</button>
@@ -253,6 +253,19 @@ export function ValidationPanel() {
         </div>
       </div>
       <p>Passing workflow tests demonstrates deterministic product behavior. It does not establish scientific validity or field-model accuracy.</p>
+    </section>
+  );
+}
+
+export function TrustPanel() {
+  return (
+    <section className="trust-panel" aria-labelledby="trust-title">
+      <div><span className="kicker">Trust principles</span><h3 id="trust-title">Why should you trust this recommendation?</h3></div>
+      <div className="trust-grid">
+        <article><strong>Evidence, not magic</strong><p>Every priority exposes the blockage, litter, rainfall, and context evidence contributing to it.</p></article>
+        <article><strong>Missing data stays missing</strong><p>Unavailable map or weather context lowers coverage instead of becoming a fabricated value.</p></article>
+        <article><strong>Humans remain in control</strong><p>Low-confidence images, mismatched scenes, and uncertain cleanup evidence route to review.</p></article>
+      </div>
     </section>
   );
 }

@@ -7,7 +7,7 @@ test("produces a deployable Next.js build", async () => {
   await access(new URL("../.next/BUILD_ID", import.meta.url));
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /DrainGuard/);
-  assert.match(page, /Stop street waste/);
+  assert.match(page, /Which drain should we clean before the <em>storm\?<\/em>/);
   assert.match(page, /Photo in\. Priority out\./);
   assert.doesNotMatch(page, /codex-preview|Your site is taking shape/);
 });
@@ -21,7 +21,7 @@ test("ships the explainable risk model and responsible-use language", async () =
   assert.match(config, /litter: 0\.15/);
   assert.match(page, /does not predict floods/i);
   assert.match(page, /COCO-SSD/);
-  assert.match(layout, /Stop street waste before the next storm moves it downstream\./);
+  assert.match(layout, /Which drain should we clean before the storm\?/);
 });
 
 test("connects location search to a real garbage-risk map", async () => {
@@ -97,8 +97,8 @@ test("explains AI evidence and protects the upload path", async () => {
 test("ships the judge walkthrough, operational impact, review actions, and comparison slider", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(page, /Run judge demo/);
-  assert.match(page, /Judge Mode active/);
+  assert.match(page, /Run the 2-minute judge demo/);
+  assert.match(page, /Guided judge demo/);
   assert.match(page, /Operational impact snapshot/);
   assert.match(page, /Queue position/);
   assert.match(page, /Approve closure/);
@@ -106,7 +106,7 @@ test("ships the judge walkthrough, operational impact, review actions, and compa
   assert.match(page, /comparisonSplit/);
   assert.match(page, /Same-drain anchor/);
   assert.match(page, /version: 3/);
-  assert.match(styles, /judge-mode-banner/);
+  assert.match(styles, /judge-narrator/);
   assert.match(styles, /impact-strip/);
   assert.match(styles, /comparison-slider/);
 });
