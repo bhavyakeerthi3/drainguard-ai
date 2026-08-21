@@ -80,6 +80,20 @@ test("ships the final pilot safeguards and evidence surfaces", async () => {
   assert.match(page, /not claimed Bengaluru street-drain accuracy/);
 });
 
+test("explains AI evidence and protects the upload path", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const map = await readFile(new URL("../app/DrainMap.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(page, /Why this score\?/);
+  assert.match(page, /Research ResNet-50 blockage classifier/);
+  assert.match(page, /12 \* 1024 \* 1024/);
+  assert.match(page, /could not be decoded/);
+  assert.match(page, /decision-path/);
+  assert.match(map, /Coordinates \$\{site\.lat\.toFixed\(4\)/);
+  assert.match(styles, /confidence-explainer/);
+  assert.match(styles, /image-error/);
+});
+
 test("ships the environmental decision-support experience", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const panels = await readFile(new URL("../app/EnvironmentalPanels.tsx", import.meta.url), "utf8");
