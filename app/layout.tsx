@@ -7,8 +7,8 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://drainguard-ai-earth.vercel.app"),
-  title: "DrainGuard AI — Which drain should we clean before the storm?",
-  description: "DrainGuard turns a street photo into explainable cleanup priorities using visible blockage, litter evidence, rainfall context, and verification after cleanup.",
+  title: "DrainGuard AI — Which drain should your crew inspect before the storm?",
+  description: "DrainGuard turns visible street evidence and changing conditions into explainable inspection priorities, then verifies whether cleanup worked.",
   applicationName: "DrainGuard AI",
   keywords: ["environmental technology", "climate tech", "storm drains", "computer vision", "waterway protection", "smart cities"],
   authors: [{ name: "Bhavya Keerthi", url: "https://github.com/bhavyakeerthi3" }],
@@ -23,7 +23,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "DrainGuard AI",
-    description: "Which drain should we clean before the storm? Detect, prioritize, act, and verify cleanup with evidence.",
+    description: "Which drain should your crew inspect before the storm? Detect, prioritize, allocate, act, and verify cleanup with evidence.",
     images: ["/og.jpg"],
   },
 };

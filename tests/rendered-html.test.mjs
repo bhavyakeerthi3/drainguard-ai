@@ -7,7 +7,7 @@ test("produces a deployable Next.js build", async () => {
   await access(new URL("../.next/BUILD_ID", import.meta.url));
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /DrainGuard/);
-  assert.match(page, /Which drain should we clean before the <em>storm\?<\/em>/);
+  assert.match(page, /Which drain should your crew inspect before the <em>storm\?<\/em>/);
   assert.match(page, /Photo in\. Priority out\./);
   assert.doesNotMatch(page, /codex-preview|Your site is taking shape/);
 });
@@ -21,7 +21,7 @@ test("ships the explainable risk model and responsible-use language", async () =
   assert.match(config, /litter: 0\.15/);
   assert.match(page, /does not predict floods/i);
   assert.match(page, /COCO-SSD/);
-  assert.match(layout, /Which drain should we clean before the storm\?/);
+  assert.match(layout, /Which drain should your crew inspect before the storm\?/);
 });
 
 test("connects location search to a real garbage-risk map", async () => {
@@ -126,6 +126,28 @@ test("ships Priority Shock and transparent capacity allocation", async () => {
   assert.match(styles, /priority-shock/);
   assert.match(styles, /action-planner/);
   assert.match(styles, /rank-movement/);
+});
+
+test("ships the signature decision ripple, verification reveal, and judge answers", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const panels = await readFile(new URL("../app/EnvironmentalPanels.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(panels, /Conditions changed/);
+  assert.match(panels, /Recalculating inspection priorities/);
+  assert.match(panels, /ACTION PLAN UPDATED/);
+  assert.match(panels, /Before \/ after decision/);
+  assert.match(page, /Checking the same scene/);
+  assert.match(page, /Measuring improvement/);
+  assert.match(page, /verification-finale/);
+  assert.match(page, /One photo found the problem/);
+  assert.match(page, /resource-pulse/);
+  assert.match(panels, /WorkflowComparison/);
+  assert.match(panels, /JudgeQuestions/);
+  assert.match(panels, /Does this optimize driving routes/);
+  assert.match(styles, /decision-ripple-status/);
+  assert.match(styles, /decision-compare/);
+  assert.match(styles, /verification-reveal/);
+  assert.match(styles, /workflow-comparison/);
 });
 
 test("ships the environmental decision-support experience", async () => {
