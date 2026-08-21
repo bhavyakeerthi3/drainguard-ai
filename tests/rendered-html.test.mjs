@@ -148,6 +148,7 @@ test("ships the signature decision ripple, verification reveal, and judge answer
   assert.match(styles, /decision-compare/);
   assert.match(styles, /verification-reveal/);
   assert.match(styles, /workflow-comparison/);
+  assert.match(styles, /pitch-mode \.impact-dashboard/);
 });
 
 test("ships the environmental decision-support experience", async () => {

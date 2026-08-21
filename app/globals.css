@@ -289,7 +289,7 @@ button { cursor: pointer; }
 .verify-stats .status-text.needs-review { color: #ffd27b; }
 
 .method-section { background: var(--paper); }
-.pitch-mode .method-section, .pitch-mode .demo-mode, .pitch-mode .scenario-explorer, .pitch-mode .persistence-note, .pitch-mode .model-evaluation-panel, .pitch-mode .workflow-evaluation, .pitch-mode .trust-panel, .pitch-mode .validation-panel, .pitch-mode footer { display: none; }
+.pitch-mode .method-section, .pitch-mode .demo-mode, .pitch-mode .scenario-explorer, .pitch-mode .persistence-note, .pitch-mode .impact-dashboard, .pitch-mode .model-evaluation-panel, .pitch-mode .workflow-evaluation, .pitch-mode .trust-panel, .pitch-mode .validation-panel, .pitch-mode .judge-questions, .pitch-mode footer { display: none; }
 .pitch-mode .topbar nav a:nth-child(6) { display: none; }.pitch-mode .pilot-pill { color: var(--lime); }.pitch-toggle.active { color: var(--ink); background: var(--lime); }
 .method-head { max-width: 900px; margin-bottom: 50px; }.method-grid { display: grid; grid-template-columns: repeat(4,1fr); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .method-grid article { padding: 28px 25px 30px 0; border-right: 1px solid var(--line); min-height: 220px; }.method-grid article:not(:first-child) { padding-left: 25px; }.method-grid article:last-child { border-right: 0; }
