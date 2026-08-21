@@ -63,9 +63,10 @@ type EvidenceRecord = {
 };
 
 type PersistedPilot = {
-  version: 2;
+  version: 3;
   sites: MapSite[];
   evidence: Record<string, EvidenceRecord>;
+  reviewDecisions?: Record<string, "open" | "approved" | "request-photo">;
 };
 
 type Detector = {
@@ -343,6 +344,10 @@ export default function Home() {
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
   const [verificationStage, setVerificationStage] = useState<"idle" | "loading" | "detecting" | "done">("idle");
   const [evidenceBySite, setEvidenceBySite] = useState<Record<string, EvidenceRecord>>({});
+  const [reviewDecisions, setReviewDecisions] = useState<Record<string, "open" | "approved" | "request-photo">>({});
+  const [judgeMode, setJudgeMode] = useState(false);
+  const [comparisonMode, setComparisonMode] = useState<"side-by-side" | "slider">("side-by-side");
+  const [comparisonSplit, setComparisonSplit] = useState(50);
   const [persistenceReady, setPersistenceReady] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const verificationInput = useRef<HTMLInputElement>(null);
@@ -376,6 +381,10 @@ export default function Home() {
     : recommendedAction(risk, cleaned);
   const sortedSites = useMemo(() => [...sites].sort((a, b) => b.risk - a.risk), [sites]);
   const reviewSites = useMemo(() => sites.filter((site) => site.status === "Needs review"), [sites]);
+  const selectedRank = Math.max(1, sortedSites.findIndex((site) => site.id === selectedSite.id) + 1);
+  const verifiedRiskReduction = verificationResult?.verified
+    ? Math.max(0, scoreRisk(analysis.blockage, analysis.litter, rainfall) - risk)
+    : null;
   const dashboardRecords = useMemo(() => sites.map((site) => ({
     ...site,
     verifiedReduction: evidenceBySite[site.id]?.verification?.verified
@@ -502,10 +511,11 @@ export default function Home() {
     try {
       const raw = window.localStorage.getItem(PILOT_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_STORAGE_KEY);
       if (raw) {
-        const saved = JSON.parse(raw) as { version: number; sites: MapSite[]; evidence?: Record<string, EvidenceRecord> };
-        if ([1, 2].includes(saved.version) && saved.sites.length > 0) {
+        const saved = JSON.parse(raw) as { version: number; sites: MapSite[]; evidence?: Record<string, EvidenceRecord>; reviewDecisions?: Record<string, "open" | "approved" | "request-photo"> };
+        if ([1, 2, 3].includes(saved.version) && saved.sites.length > 0) {
           setSites(saved.sites);
           setEvidenceBySite(saved.evidence ?? {});
+          setReviewDecisions(saved.reviewDecisions ?? {});
           const first = saved.sites[0];
           setSelectedSite(first);
           const record = saved.evidence?.[first.id];
@@ -532,14 +542,14 @@ export default function Home() {
 
   useEffect(() => {
     if (!persistenceReady) return;
-    const payload: PersistedPilot = { version: 2, sites, evidence: evidenceBySite };
+    const payload: PersistedPilot = { version: 3, sites, evidence: evidenceBySite, reviewDecisions };
     try {
       window.localStorage.setItem(PILOT_STORAGE_KEY, JSON.stringify(payload));
       window.localStorage.removeItem(LEGACY_STORAGE_KEY);
     } catch {
       // Storage can be full or disabled; the live session remains usable.
     }
-  }, [evidenceBySite, persistenceReady, sites]);
+  }, [evidenceBySite, persistenceReady, reviewDecisions, sites]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
@@ -1057,7 +1067,37 @@ export default function Home() {
     window.requestAnimationFrame(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }));
   }
 
-  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nCleanup priority: ${band.label.toUpperCase()} (${risk}/100)\nEnvironmental impact risk: ${environmentalResult.score}/100 (${environmentalResult.confidence} confidence · ${environmentalResult.coverage}% coverage)\nLocation: ${selectedSite.place}\nObserved blockage: ${effectiveAnalysis.blockage}%\nLitter signal: ${effectiveAnalysis.litter}%\nEnvironmental context: ${waterwayContext.message}\nVerification: ${cleaned ? `Passed · ${verificationResult?.reduction ?? 0} point obstruction reduction` : "Pending field evidence"}\nRainfall input: ${rainfall === null ? "Unavailable (not estimated)" : `${rainfall.toFixed(1)} mm / 24h`}\n\nRecommended action: ${action}\n\nDecision-support estimate only. This is not a flood prediction, hydrological model, pollution-volume estimate, or emergency alert.`;
+  function runJudgeDemo() {
+    const scenario = DEMO_SCENARIOS.find((item) => item.id === "litter") ?? DEMO_SCENARIOS[2];
+    setJudgeMode(true);
+    setComparisonMode("side-by-side");
+    setComparisonSplit(50);
+    loadDemoScenario(scenario);
+    window.setTimeout(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }), 120);
+  }
+
+  function setReviewDecision(site: MapSite, decision: "open" | "approved" | "request-photo") {
+    setReviewDecisions((current) => ({ ...current, [site.id]: decision }));
+    if (decision === "approved") {
+      setSites((current) => current.map((item) => item.id === site.id ? {
+        ...item,
+        status: "Verified clear",
+        recommendedAction: "Human-approved closure. Continue routine monitoring.",
+      } : item));
+      setSelectedSite((current) => current.id === site.id ? {
+        ...current,
+        status: "Verified clear",
+        recommendedAction: "Human-approved closure. Continue routine monitoring.",
+      } : current);
+    } else if (decision === "request-photo") {
+      setSites((current) => current.map((item) => item.id === site.id ? { ...item, status: "Needs review", recommendedAction: "Request a clearer same-drain after photo." } : item));
+      setSelectedSite((current) => current.id === site.id ? { ...current, status: "Needs review", recommendedAction: "Request a clearer same-drain after photo." } : current);
+    } else {
+      keepReportOpen(site);
+    }
+  }
+
+  const report = `DRAINGUARD FIELD BRIEF · ${selectedSite.id}\nCleanup priority: ${band.label.toUpperCase()} (${risk}/100) · queue position #${selectedRank}\nEnvironmental impact risk: ${environmentalResult.score}/100 (${environmentalResult.confidence} confidence · ${environmentalResult.coverage}% coverage)\nLocation: ${selectedSite.place} · ${selectedSite.lat.toFixed(4)}, ${selectedSite.lon.toFixed(4)}\nObserved blockage: ${effectiveAnalysis.blockage}%\nLitter signal: ${effectiveAnalysis.litter}%\nEnvironmental context: ${waterwayContext.message}\nVerification: ${cleaned ? `Passed · ${verificationResult?.reduction ?? 0} point obstruction reduction` : "Pending field evidence"}\nRainfall input: ${rainfall === null ? "Unavailable (not estimated)" : `${rainfall.toFixed(1)} mm / 24h`}\n\nRecommended action: ${action}\n\nDecision-support estimate only. This is not a flood prediction, hydrological model, pollution-volume estimate, or emergency alert.`;
 
   async function copyReport() {
     await navigator.clipboard.writeText(report);
@@ -1089,8 +1129,16 @@ export default function Home() {
           <p>DrainGuard AI helps communities identify blocked, litter-filled storm drains, prioritize inspection using visible evidence and rainfall context, and verify cleanup with before-and-after evidence.</p>
           <div className="hero-actions">
             <a className="button" href="#inspect">Run an inspection <span>→</span></a>
+            <button className="button button-judge" type="button" onClick={runJudgeDemo}>Run judge demo <span>▶</span></button>
             <a className="text-button" href="#demo">Open two-minute demo <span>↘</span></a>
           </div>
+          {judgeMode && (
+            <div className="judge-mode-banner" role="status">
+              <div><span className="judge-live-dot" /> <strong>Judge Mode active</strong></div>
+              <p>Blocked drain → explainable priority → map queue → before/after verification.</p>
+              <button className="text-button" type="button" onClick={() => setJudgeMode(false)}>Exit guided mode ×</button>
+            </div>
+          )}
         </div>
         <div className="hero-proof impact-chain" aria-label="Potential street-to-waterway impact chain">
           <div className="proof-head"><span>Why intervene before rainfall?</span><span className="live-dot">Potential pathway</span></div>
@@ -1156,6 +1204,11 @@ export default function Home() {
                 {stage === "done" && "✓ Analysis complete"}
               </p>
               {imageError && <p className="image-error" role="alert">{imageError}</p>}
+              <div className="evidence-strip" aria-label="Visual evidence summary">
+                <div><span>Evidence gate</span><strong>{confidenceLabel(analysis.drainConfidence ?? analysis.confidence)}</strong></div>
+                <div><span>Detected objects</span><strong>{analysis.objects.length} {analysis.objects.length === 1 ? "box" : "boxes"}</strong></div>
+                <div><span>Model path</span><strong>{modelLabel(analysis.signal)}</strong></div>
+              </div>
             </div>
           </div>
 
@@ -1203,6 +1256,11 @@ export default function Home() {
             <div className="recommendation">
               <span>Recommended next step</span>
               <p>{action}</p>
+            </div>
+            <div className="impact-strip" aria-label="Operational impact snapshot">
+              <div><span>Queue position</span><strong>#{selectedRank}</strong><small>of {sortedSites.length} reports</small></div>
+              <div><span>Response target</span><strong>{selectedSite.status === "Dispatch now" ? "Now" : selectedSite.status === "Inspect today" ? "24h" : selectedSite.status === "Verified clear" ? "Routine" : "Review"}</strong><small>{selectedSite.status}</small></div>
+              <div><span>Risk delta</span><strong>{verifiedRiskReduction === null ? "—" : `−${verifiedRiskReduction}`}</strong><small>{verifiedRiskReduction === null ? "after verification" : "priority points"}</small></div>
             </div>
             <button className="button button-full" onClick={() => setReportOpen(true)}>Generate field brief <span>→</span></button>
             <p className="confidence">Drain presence {analysis.drainConfidence ?? analysis.confidence}% · evidence confidence {analysis.confidence}% · environmental coverage {environmentalResult.coverage}% · human verification required</p>
@@ -1291,9 +1349,10 @@ export default function Home() {
             {reviewSites.length === 0 && <p className="review-empty">No uncertain reports. Failed or low-confidence checks will appear here automatically.</p>}
             {reviewSites.map((site) => {
               const verification = evidenceBySite[site.id]?.verification;
+              const reviewDecision = reviewDecisions[site.id] ?? "open";
               return (
                 <article className="review-item" key={site.id}>
-                  <div><span>{site.id}</span><strong>{site.place}</strong></div>
+                  <div><span>{site.id}</span><strong>{site.place}</strong><em className={`review-status review-status-${reviewDecision}`}>{reviewDecision === "request-photo" ? "Photo requested" : reviewDecision === "approved" ? "Human approved" : "Open"}</em></div>
                   <p>{verification
                     ? (!verification.sameDrain
                       ? `Scene match ${verification.sceneMatch ?? 0}%—the system could not prove this is the same drain.`
@@ -1301,7 +1360,8 @@ export default function Home() {
                     : "Low-confidence or non-drain evidence requires a field officer to check the inlet."}</p>
                   <div className="review-actions">
                     <button className="button button-outline" onClick={() => openReview(site)}>Open evidence</button>
-                    <button className="review-keep" onClick={() => keepReportOpen(site)}>Keep open</button>
+                    <button className="review-approve" onClick={() => setReviewDecision(site, "approved")}>Approve closure</button>
+                    <button className="review-keep" onClick={() => setReviewDecision(site, "request-photo")}>Request photo</button>
                   </div>
                 </article>
               );
@@ -1336,20 +1396,50 @@ export default function Home() {
           <VerificationChecklist checks={verificationChecks} />
         </div>
         <div className={`verification-card ${cleaned ? "is-clean" : ""}`}>
-          <div className="comparison-grid">
-            <div className="comparison-pane">
-              <NextImage src={imageUrl} alt="Drain before cleanup" fill sizes="(max-width: 1000px) 50vw, 27vw" loading="eager" unoptimized />
-              <span className="comparison-label">Before · {analysis.blockage}% blocked</span>
+          <div className="comparison-toolbar" role="group" aria-label="Before and after comparison view">
+            <span>Evidence comparison</span>
+            <div>
+              <button type="button" className={comparisonMode === "side-by-side" ? "active" : ""} onClick={() => setComparisonMode("side-by-side")}>Side by side</button>
+              <button type="button" className={comparisonMode === "slider" ? "active" : ""} onClick={() => setComparisonMode("slider")} disabled={!verificationImageUrl}>Slider</button>
             </div>
-            <div className={`comparison-pane after-pane ${verificationImageUrl ? "has-photo" : ""}`}>
-              {verificationImageUrl ? (
-                <NextImage src={verificationImageUrl} alt="Drain after cleanup" fill sizes="(max-width: 1000px) 50vw, 27vw" unoptimized />
-              ) : (
-                <div className="after-placeholder"><span>+</span><p>After photo appears here</p></div>
-              )}
-              <span className="comparison-label">After · {verificationResult ? `${verificationResult.blockage}% blocked` : "waiting"}</span>
+          </div>
+          {comparisonMode === "slider" && verificationImageUrl ? (
+            <div className="comparison-slider">
+              <div className="comparison-slider-layer comparison-slider-before">
+                <NextImage src={imageUrl} alt="Drain before cleanup" fill sizes="(max-width: 1000px) 100vw, 54vw" loading="eager" unoptimized />
+              </div>
+              <div className="comparison-slider-layer comparison-slider-after" style={{ clipPath: `inset(0 ${100 - comparisonSplit}% 0 0)` }}>
+                <NextImage src={verificationImageUrl} alt="Drain after cleanup" fill sizes="(max-width: 1000px) 100vw, 54vw" unoptimized />
+              </div>
+              <span className="comparison-label comparison-label-before">Before · {analysis.blockage}% blocked</span>
+              <span className="comparison-label comparison-label-after">After · {verificationResult ? `${verificationResult.blockage}% blocked` : "waiting"}</span>
+              <div className="comparison-slider-handle" style={{ left: `${comparisonSplit}%` }} aria-hidden="true"><span>↔</span></div>
               {cleaned && <div className="clean-mask"><span>✓ Evidence passed</span></div>}
             </div>
+          ) : (
+            <div className="comparison-grid">
+              <div className="comparison-pane">
+                <NextImage src={imageUrl} alt="Drain before cleanup" fill sizes="(max-width: 1000px) 50vw, 27vw" loading="eager" unoptimized />
+                <span className="comparison-label">Before · {analysis.blockage}% blocked</span>
+              </div>
+              <div className={`comparison-pane after-pane ${verificationImageUrl ? "has-photo" : ""}`}>
+                {verificationImageUrl ? (
+                  <NextImage src={verificationImageUrl} alt="Drain after cleanup" fill sizes="(max-width: 1000px) 50vw, 27vw" unoptimized />
+                ) : (
+                  <div className="after-placeholder"><span>+</span><p>After photo appears here</p></div>
+                )}
+                <span className="comparison-label">After · {verificationResult ? `${verificationResult.blockage}% blocked` : "waiting"}</span>
+                {cleaned && <div className="clean-mask"><span>✓ Evidence passed</span></div>}
+              </div>
+            </div>
+          )}
+          {comparisonMode === "slider" && verificationImageUrl && (
+            <label className="comparison-range">Drag to compare <input type="range" min="5" max="95" value={comparisonSplit} onChange={(event) => setComparisonSplit(Number(event.target.value))} aria-label="Before and after comparison split" /> <span>{comparisonSplit}% after</span></label>
+          )}
+          <div className="verification-evidence-meta">
+            <span><b>Same-drain anchor</b> {selectedSite.lat.toFixed(4)}, {selectedSite.lon.toFixed(4)}</span>
+            <span><b>Evidence pair</b> {verificationImageUrl ? `${fileName} + ${verificationFileName}` : "Awaiting after photo"}</span>
+            <span><b>Captured</b> {evidenceBySite[selectedSite.id]?.updatedAt ? new Date(evidenceBySite[selectedSite.id].updatedAt).toLocaleString() : "Not yet recorded"}</span>
           </div>
           <div className="verify-stats">
             <div><span>Before</span><strong>{analysis.blockage}<small>% blocked</small></strong></div>
@@ -1431,7 +1521,7 @@ export default function Home() {
         <div className="responsibility-note">
           <strong>Responsible use</strong>
           <p>DrainGuard supports inspection prioritization. It does not predict floods, measure pollution volume, or replace hydrological and engineering assessment. Scores depend on image quality, rainfall inputs, and available map context.</p>
-          <span>Prototype v0.14</span>
+          <span>Prototype v0.15 · Judge-ready pilot</span>
         </div>
       </section>
 
