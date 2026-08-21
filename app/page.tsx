@@ -295,6 +295,19 @@ function riskBand(risk: number) {
   return { label: "Low", tone: "low" };
 }
 
+function confidenceLabel(value: number) {
+  if (value >= 80) return "Strong visual evidence";
+  if (value >= 60) return "Usable with review";
+  return "Uncertain · human review";
+}
+
+function modelLabel(signal: string) {
+  if (signal.includes("Research ResNet-50")) return "Research ResNet-50 blockage classifier";
+  if (signal.includes("Visual fallback")) return "Visual texture fallback";
+  if (signal.includes("Demo scenario")) return "Controlled demo evidence";
+  return "Drain-domain evidence gate";
+}
+
 function waterwayContextForSite(site: MapSite): WaterwayContext {
   if (typeof site.environmentalDistanceMeters === "number") {
     return {
@@ -310,6 +323,7 @@ function waterwayContextForSite(site: MapSite): WaterwayContext {
 export default function Home() {
   const [imageUrl, setImageUrl] = useState("/demo-drain.jpg");
   const [fileName, setFileName] = useState("EGLE stormwater sample");
+  const [imageError, setImageError] = useState("");
   const [analysis, setAnalysis] = useState<Analysis>(SAMPLE_ANALYSIS);
   const [mode, setMode] = useState<"surge" | "live">("live");
   const [scenarioRainfall, setScenarioRainfall] = useState(64);
@@ -542,6 +556,7 @@ export default function Home() {
 
   function selectSite(site: MapSite, suppliedRecord?: EvidenceRecord) {
     const record = suppliedRecord ?? evidenceBySite[site.id];
+    setImageError("");
     if (!site.isDemo) setMode("live");
     setSelectedSite(site);
     setWeatherStatus(site.weatherStatus ?? `Loading forecast · ${site.place}`);
@@ -575,8 +590,16 @@ export default function Home() {
   async function chooseImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/")) return;
     event.target.value = "";
+    if (!file.type.startsWith("image/")) {
+      setImageError("Please choose a JPG, PNG, WEBP, or HEIC image.");
+      return;
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      setImageError("That image is larger than 12 MB. Choose a smaller photo so the on-device model can process it.");
+      return;
+    }
+    setImageError("");
     setStage("loading");
     try {
       const nextUrl = await fileToStoredImage(file);
@@ -591,14 +614,24 @@ export default function Home() {
       await runAnalysis(nextUrl, file.name);
     } catch {
       setAnalysis((current) => ({ ...current, signal: "Could not prepare this image" }));
+      setImageError("This image could not be decoded. Try exporting it as JPG or PNG and upload again.");
       setStage("idle");
     }
   }
 
   async function chooseVerificationImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    if (!file || !file.type.startsWith("image/")) return;
+    if (!file) return;
     event.target.value = "";
+    if (!file.type.startsWith("image/")) {
+      setImageError("Please choose an image for the after-cleanup evidence.");
+      return;
+    }
+    if (file.size > 12 * 1024 * 1024) {
+      setImageError("That after photo is larger than 12 MB. Choose a smaller image and try again.");
+      return;
+    }
+    setImageError("");
     setVerificationStage("loading");
     try {
       const nextUrl = await fileToStoredImage(file);
@@ -608,6 +641,7 @@ export default function Home() {
       setCleaned(false);
       await verifyCleanup(nextUrl, file.name);
     } catch {
+      setImageError("This after photo could not be decoded. Try a JPG or PNG export.");
       setVerificationStage("idle");
     }
   }
@@ -841,6 +875,7 @@ export default function Home() {
       setStage("done");
     } catch {
       setAnalysis((current) => ({ ...current, signal: "Could not read this image" }));
+      setImageError("The image could not be analyzed in this browser. Try another clear drain photo.");
       setStage("idle");
     }
   }
@@ -920,7 +955,7 @@ export default function Home() {
       setSites((current) => [site, ...current]);
       setEvidenceBySite((current) => ({ ...current, [site.id]: evidence }));
       selectSite(site, evidence);
-      setLocationStatus(`Garbage marker added at ${site.place}.`);
+      setLocationStatus(`Garbage marker added at ${site.place} (${result.lat.toFixed(4)}, ${result.lon.toFixed(4)}). Live rainfall and nearby-waterway context are loading for this coordinate.`);
     } catch {
       setLocationStatus("Could not reach the location service. Please try again.");
     } finally {
@@ -940,6 +975,7 @@ export default function Home() {
   }
 
   function restoreSample() {
+    setImageError("");
     setImageUrl("/demo-drain.jpg");
     setFileName("EGLE stormwater sample");
     setAnalysis(SAMPLE_ANALYSIS);
@@ -1006,6 +1042,7 @@ export default function Home() {
       isDemo: true,
     };
     setAnalysis(demoAnalysis);
+    setImageError("");
     setSelectedSite(demoSite);
     setSites((current) => [demoSite, ...current.filter((site) => !site.id.startsWith("DEMO-"))]);
     setWaterwayContext(demoWaterway);
@@ -1118,6 +1155,7 @@ export default function Home() {
                 {stage === "detecting" && "Preliminary score ready. Object detector is refining it…"}
                 {stage === "done" && "✓ Analysis complete"}
               </p>
+              {imageError && <p className="image-error" role="alert">{imageError}</p>}
             </div>
           </div>
 
@@ -1128,6 +1166,12 @@ export default function Home() {
               <div><span className="risk-label">{band.label}</span><small>cleanup priority</small></div>
             </div>
             <div className="risk-meter"><span style={{ width: `${risk}%` }} /></div>
+            <div className="decision-path" aria-label="DrainGuard decision path">
+              <span className="decision-done">1 · Detect</span>
+              <span className="decision-done">2 · Prioritize</span>
+              <span className={stage === "done" ? "decision-active" : ""}>3 · Act</span>
+              <span className={verificationResult ? "decision-active" : ""}>4 · Verify</span>
+            </div>
 
             <div className="signal-list">
               <div className="signal-row">
@@ -1162,6 +1206,15 @@ export default function Home() {
             </div>
             <button className="button button-full" onClick={() => setReportOpen(true)}>Generate field brief <span>→</span></button>
             <p className="confidence">Drain presence {analysis.drainConfidence ?? analysis.confidence}% · evidence confidence {analysis.confidence}% · environmental coverage {environmentalResult.coverage}% · human verification required</p>
+            <div className="confidence-explainer" aria-label="AI evidence explanation">
+              <div className="confidence-explainer-head"><span>Why this score?</span><strong>{confidenceLabel(analysis.confidence)}</strong></div>
+              <p>{modelLabel(analysis.signal)} combines the blockage estimate with visible scene evidence. The score is decision support, not a claim that the image proves flooding or pollution volume.</p>
+              <div className="confidence-factors">
+                <span><b>{analysis.drainConfidence ?? analysis.confidence}%</b> drain gate</span>
+                <span><b>{analysis.objects.length}</b> detected objects</span>
+                <span><b>{environmentalResult.coverage}%</b> context coverage</span>
+              </div>
+            </div>
           </aside>
         </div>
         <PriorityExplanation priority={priorityResult} environmental={environmentalResult} action={action} />
@@ -1378,7 +1431,7 @@ export default function Home() {
         <div className="responsibility-note">
           <strong>Responsible use</strong>
           <p>DrainGuard supports inspection prioritization. It does not predict floods, measure pollution volume, or replace hydrological and engineering assessment. Scores depend on image quality, rainfall inputs, and available map context.</p>
-          <span>Prototype v0.13</span>
+          <span>Prototype v0.14</span>
         </div>
       </section>
 
