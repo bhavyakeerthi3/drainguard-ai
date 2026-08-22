@@ -2,13 +2,23 @@
 
 > Stop street waste before the next storm moves it downstream.
 
+[![Quality checks](https://github.com/bhavyakeerthi3/drainguard-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/bhavyakeerthi3/drainguard-ai/actions/workflows/ci.yml)
+[![Live demo](https://img.shields.io/badge/live-demo-0d6b5f?logo=vercel&logoColor=white)](https://drainguard-ai-earth.vercel.app)
+[![License: MIT](https://img.shields.io/badge/license-MIT-111827.svg)](LICENSE)
+
 DrainGuard AI is an AI-assisted environmental monitoring and cleanup-prioritization prototype. A field worker uploads a street photo, the app checks the visual evidence, combines blockage and litter signals with location-specific rainfall and mapped waterway context, and ranks the report for action. A second photo is required to verify cleanup.
 
-[Live demo](https://drainguard-ai-earth.vercel.app) · [Devpost submission notes](docs/DEVPOST.md) · [Architecture and evaluation](docs/ARCHITECTURE.md)
+[Live demo](https://drainguard-ai-earth.vercel.app) · [Devpost submission notes](docs/DEVPOST.md) · [Repository handoff](docs/REPOSITORY_GUIDE.md) · [Architecture and evaluation](docs/ARCHITECTURE.md)
 
 ![DrainGuard AI dashboard](public/og.jpg)
 
 Built for the **GatewayGS & AEI Initiative: AI 4 Earth Hackathon**.
+
+## Repository status
+
+This repository contains the complete public prototype: the Next.js product interface, browser vision pipeline, environmental context API, scoring and verification policy, benchmark fixtures, model artifact metadata, tests, CI workflow, and submission documentation. The deployed app is a single-device pilot; it does not claim to be a production municipal data platform.
+
+The product is intentionally framed as **inspection prioritization and cleanup verification**, not flood prediction. Every result exposes its evidence, confidence, data coverage, recommended action, and limitation.
 
 ## The problem
 
@@ -36,6 +46,46 @@ It is a prioritization aid, not a flood predictor or replacement for engineering
 - stores compressed before/after evidence on the inspection device;
 - requires a same-drain scene match and meaningful improvement before closing a report;
 - routes non-drain, low-confidence, unchanged, or mismatched evidence to human review.
+
+## Complete product workflow
+
+The public interface is organized into three operational stages:
+
+| Stage | What the user does | What DrainGuard returns |
+| --- | --- | --- |
+| **Inspect** | Upload a drain photo or reset the controlled sample | Blockage, drain-presence, litter, confidence, rainfall, waterway context, and explainable priority |
+| **Prioritize** | Search a location, review the map, and inspect the ranked queue | Location-aware reports, environmental concern, reason for ranking, persistence state, and human-review actions |
+| **Verify** | Upload an after-cleanup photo and compare it side-by-side or with the slider | Same-drain match, before/after deltas, pass/fail checks, verified-clear status or human review |
+
+Additional product surfaces include:
+
+- **Priority Shock:** controlled rainfall changes show why the same drains can change order without changing the photos.
+- **Action Planner:** a transparent crew/capacity allocator shows which reports fit today and which remain in the next wave.
+- **Controlled scenarios:** dry, moderate, and heavy rainfall examples are labelled as sample data, never as a forecast.
+- **Field brief:** the current evidence and decision can be copied as a concise operational handoff.
+- **Pitch Mode:** a compact story-first view hides supporting panels for a short product presentation.
+- **Validation and trust panels:** the UI states what the prototype proves, what it does not prove, and when a person must decide.
+- **Evaluation surfaces:** the held-out model audit, confusion matrix, and twelve workflow-policy checks are visible in the app.
+
+## Decision policy in one view
+
+```text
+priority = 0.55 × blockage + 0.30 × rainfall index + 0.15 × litter
+```
+
+The operational bands are `0–59 Monitor`, `60–79 Inspect today`, and `80–100 Dispatch now`. A high score never bypasses the drain-evidence gate.
+
+Cleanup closes only when all of these pass:
+
+```text
+same-drain scene match >= 68%
+drain confidence      >= 60%
+remaining blockage    <= 48%
+remaining litter      <= 48%
+blockage reduction    >= 15 points
+```
+
+Any failed or uncertain check remains open for human review.
 
 ## Explainable priority model
 
@@ -130,6 +180,16 @@ Open <http://localhost:3000>.
 
 No API keys are required for the current prototype.
 
+## Deployment
+
+The production app is deployed from `main` on Vercel:
+
+- Live URL: <https://drainguard-ai-earth.vercel.app>
+- GitHub: <https://github.com/bhavyakeerthi3/drainguard-ai>
+- API route: `/api/environmental-context?latitude=<lat>&longitude=<lon>`
+
+The API validates coordinate ranges, fetches rainfall and mapped-waterway context in parallel, uses bounded timeouts, and returns explicit unavailable states rather than fabricated values. Successful responses are edge-cached for 15 minutes.
+
 ## Quality checks
 
 ```bash
@@ -143,6 +203,8 @@ npm audit
 ```
 
 The automated suite verifies the production build, risk formula, live map wiring, cleanup workflow, safeguards, benchmark split integrity, and 12 documented decision-regression cases.
+
+GitHub Actions runs the same quality gates on pushes and pull requests to `main`: lint, TypeScript, scoring tests, the production build/test suite, and a high-severity production dependency audit. See [CONTRIBUTING.md](CONTRIBUTING.md) for the expected development loop.
 
 ## Current evaluation
 
@@ -164,6 +226,17 @@ The proxy dataset contains UK trash screens rather than Bengaluru street inlets,
 ## Privacy and persistence
 
 Photo analysis runs client-side. Reports and compressed evidence currently persist in browser storage on the inspection device. A shared authenticated municipal backend is planned for multi-user deployments.
+
+## Known limitations
+
+- The held-out model audit uses UK trash-screen imagery, not Bengaluru street drains.
+- A 40-image audit is an integration check, not a field deployment guarantee.
+- Image evidence estimates visible obstruction; it does not measure hydraulic capacity or pollution volume.
+- Browser storage is device-local. Reports are not shared between users or devices.
+- Map, geocoding, weather, and model-library providers can be unavailable; the UI exposes the gap.
+- Real municipal use still needs field validation, authentication, retention controls, role-based access, and an audit log.
+
+These limitations are part of the product contract and are covered in the [model card](docs/MODEL_CARD.md), [evaluation protocol](docs/EVALUATION.md), and [architecture notes](docs/ARCHITECTURE.md).
 
 ## Project structure
 
