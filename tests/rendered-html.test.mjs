@@ -134,7 +134,7 @@ test("ships Priority Shock and transparent capacity allocation", async () => {
   assert.match(styles, /rank-movement/);
 });
 
-test("ships the signature decision ripple, verification reveal, and judge answers", async () => {
+test("ships the signature decision ripple and verification reveal", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const panels = await readFile(new URL("../app/EnvironmentalPanels.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
@@ -148,8 +148,9 @@ test("ships the signature decision ripple, verification reveal, and judge answer
   assert.match(page, /One photo found the problem/);
   assert.match(page, /resource-pulse/);
   assert.match(panels, /WorkflowComparison/);
-  assert.match(panels, /JudgeQuestions/);
-  assert.match(panels, /Does this optimize driving routes/);
+  assert.doesNotMatch(page, /JudgeQuestions|Judge-ready pilot/);
+  assert.doesNotMatch(panels, /Judge questions|Does this optimize driving routes/);
+  assert.doesNotMatch(styles, /judge-questions|button-judge/);
   assert.match(styles, /decision-ripple-status/);
   assert.match(styles, /decision-compare/);
   assert.match(styles, /verification-reveal/);

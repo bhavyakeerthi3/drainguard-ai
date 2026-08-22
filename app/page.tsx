@@ -7,7 +7,6 @@ import {
   ActionPlanner,
   DemoMode,
   EnvironmentalDashboard,
-  JudgeQuestions,
   PriorityExplanation,
   PriorityShockPanel,
   RainfallScenarioExplorer,
@@ -1622,11 +1621,10 @@ export default function Home() {
         </div>
         <TrustPanel />
         <ValidationPanel />
-        <JudgeQuestions />
         <div className="responsibility-note">
           <strong>Responsible use</strong>
           <p>DrainGuard supports inspection prioritization. It does not predict floods, measure pollution volume, or replace hydrological and engineering assessment. Scores depend on image quality, rainfall inputs, and available map context.</p>
-          <span>Prototype v0.15 · Judge-ready pilot</span>
+          <span>Prototype v0.15 · Field pilot</span>
         </div>
       </section>
 

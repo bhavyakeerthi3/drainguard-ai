@@ -406,22 +406,6 @@ export function WorkflowComparison() {
   );
 }
 
-export function JudgeQuestions() {
-  const questions = [
-    ["Is this flood prediction?", "No. DrainGuard supports inspection decisions using visible evidence, rainfall inputs or scenarios, and available environmental context. It does not model flooding."],
-    ["Does the system measure pollution?", "No. Visible litter is an evidence signal; DrainGuard does not claim to measure pollution volume."],
-    ["Is the AI always correct?", "No. Uncertain evidence can be routed to human review, and validation limitations are explicitly documented."],
-    ["Does this optimize driving routes?", "No. The Action Planner allocates inspection capacity by priority. It does not claim route or travel-time optimization without routing data."],
-    ["What makes DrainGuard different?", "It connects Evidence → Priority → Resource decision → Action → Verification in one traceable workflow."],
-  ];
-  return (
-    <section className="judge-questions" aria-labelledby="judge-questions-title">
-      <div><span className="kicker">Judge questions</span><h3 id="judge-questions-title">Clear answers for the hard questions.</h3></div>
-      <div className="judge-question-list">{questions.map(([question, answer]) => <details key={question}><summary>{question}<span>+</span></summary><p>{answer}</p></details>)}</div>
-    </section>
-  );
-}
-
 export function DemoMode({ scenarios, onSelect }: { scenarios: DemoScenario[]; onSelect: (scenario: DemoScenario) => void }) {
   return (
     <section className="demo-mode" aria-labelledby="demo-mode-title">
