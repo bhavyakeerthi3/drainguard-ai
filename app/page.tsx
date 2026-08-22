@@ -1238,7 +1238,7 @@ export default function Home() {
           <h1>Which drain should your crew inspect before the <em>storm?</em></h1>
           <p>DrainGuard turns visible street evidence and changing conditions into explainable inspection priorities—then verifies whether cleanup worked.</p>
           <div className="hero-actions">
-            <button className="button" type="button" onClick={runJudgeDemo}>Run the 2-minute judge demo <span>→</span></button>
+            <button className="button" type="button" onClick={runJudgeDemo}>Run the 90-second judge demo <span>→</span></button>
             <a className="text-button" href="#inspect">Inspect a drain <span>↘</span></a>
           </div>
           <div className="hero-flow" aria-label="DrainGuard product flow"><span>DETECT</span><i>→</i><span>PRIORITIZE</span><i>→</i><span>ALLOCATE</span><i>→</i><span>ACT</span><i>→</i><span>VERIFY</span></div>
@@ -1259,7 +1259,7 @@ export default function Home() {
 
       {judgeMode && (
         <section className="judge-narrator" id="judge-demo" aria-labelledby="judge-demo-title">
-          <div className="judge-narrator-topline"><span>🎬 Guided judge demo</span><strong>Controlled demonstration data</strong></div>
+          <div className="judge-narrator-topline"><span>🎬 90-second judge demo</span><strong>Controlled demonstration data</strong></div>
           <div className="judge-stepper" aria-label="Judge demo progress">
             {JUDGE_STEPS.map((step, index) => (
               <button key={step.id} type="button" className={index === judgeStep ? "active" : index < judgeStep ? "complete" : ""} onClick={() => applyJudgeStep(index)}><b>{String(index + 1).padStart(2, "0")}</b><span>{step.label}</span></button>

@@ -425,7 +425,7 @@ export function JudgeQuestions() {
 export function DemoMode({ scenarios, onSelect }: { scenarios: DemoScenario[]; onSelect: (scenario: DemoScenario) => void }) {
   return (
     <section className="demo-mode" aria-labelledby="demo-mode-title">
-      <div className="demo-heading"><div><span className="kicker">Two-minute judge walkthrough</span><h3 id="demo-mode-title">Demo mode</h3></div><strong>Sample data for demonstration</strong></div>
+      <div className="demo-heading"><div><span className="kicker">90-second judge walkthrough</span><h3 id="demo-mode-title">Demo mode</h3></div><strong>Sample data for demonstration</strong></div>
       <p>Select a controlled scenario to update the inspection, scoring, explanation, and map workflow. These examples are not real municipal observations.</p>
       <div className="demo-grid">
         {scenarios.map((scenario, index) => (

@@ -1,37 +1,39 @@
 # 90-second hackathon demo script
 
+**Start:** Open the deployed site and click **Run the 90-second judge demo**. The guided narrator now uses the same six-stage story as this script: See → Understand → Adapt → Decide → Verify → Close the loop.
+
 ## 0:00–0:10 — Hook
 
 **Screen:** DrainGuard hero and environmental pathway.
 
 > Street litter does not stay on the street. When a drain is blocked, rainfall can move visible waste toward waterways. DrainGuard helps teams decide where to act first.
 
-## 0:10–0:27 — Inspect
+## 0:10–0:24 — See and inspect
 
 **Screen:** Select “Heavy blockage + litter” in Demo Mode, then show the photo result.
 
 > A field worker uploads one photo. A domain-specific ResNet-50 estimates blockage locally in the browser, while COCO-SSD is used separately for visible litter. Uncertain or unrelated photos go to review.
 
-## 0:27–0:44 — Explain and explore
+## 0:24–0:40 — Understand and adapt
 
 **Screen:** Show “Why this priority?” and apply the heavy-rain scenario.
 
 > Every score is explainable. Cleanup priority combines blockage, rainfall, and litter. A separate environmental estimate adds mapped waterway proximity. If that context is unavailable, the app says so and lowers evidence coverage. The scenario explorer shows sensitivity; it does not predict flooding.
 
-## 0:44–0:58 — Map and dashboard
+## 0:40–0:54 — Decide with limited capacity
 
 **Screen:** Show the environmental risk map and Demo preview dashboard.
 
-> Reports are ranked highest priority first. Map symbols show environmental concern, cleanup status, and human review without relying only on color. The dashboard uses stored reports and clearly labels sample data.
+> Set Available crews to 1 and Inspection capacity to 2. The Action Planner selects the highest-priority reports and explains why another report waits. This is capacity allocation, not route optimization.
 
-## 0:58–1:16 — Verify
+## 0:54–1:14 — Verify
 
 **Screen:** Show before/after verification and its four checks.
 
 > Cleanup is not complete until evidence passes. DrainGuard checks the same scene, drain confidence, obstruction improvement, and residual litter. Any failed check explains exactly why a person must review it.
 
-## 1:16–1:30 — Validation and close
+## 1:14–1:30 — Close
 
 **Screen:** Held-out AI evaluation, then Validation & Limitations.
 
-> On a balanced audit from four held-out cameras, the deployed model reached 92.5% accuracy, caught all 20 blocked examples, and correctly rejected 17 of 20 clear ones. We show the confusion matrix, confidence interval, and scope: this is a UK trash-screen proxy, not Bengaluru field accuracy. DrainGuard is honest decision support—detect, prioritize, act, and verify before waste moves downstream.
+> DrainGuard does not stop at detection. It connects evidence to priority, priority to a limited-resource decision, and action to verification. The final memory is: the drains did not change, the conditions did, so the decision changed—and the cleanup was proved with evidence.

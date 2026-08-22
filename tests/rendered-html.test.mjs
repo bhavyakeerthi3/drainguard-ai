@@ -97,8 +97,8 @@ test("explains AI evidence and protects the upload path", async () => {
 test("ships the judge walkthrough, operational impact, review actions, and comparison slider", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(page, /Run the 2-minute judge demo/);
-  assert.match(page, /Guided judge demo/);
+  assert.match(page, /Run the 90-second judge demo/);
+  assert.match(page, /90-second judge demo/);
   assert.match(page, /Operational impact snapshot/);
   assert.match(page, /Queue position/);
   assert.match(page, /Approve closure/);
