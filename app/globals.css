@@ -34,7 +34,8 @@ button { cursor: pointer; }
 .pilot-pill { display: flex; align-items: center; gap: 8px; border: 1px solid rgba(255,255,255,.16); border-radius: 999px; padding: 7px 12px; font-family: var(--font-geist-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #d2dbd5; }
 .pilot-pill span, .live-dot::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 4px rgba(223,255,104,.12); }
 .topbar nav { display: flex; justify-content: flex-end; gap: 28px; font-size: 13px; color: #c6d0ca; }
-.topbar nav a:hover { color: var(--lime); }
+.topbar nav a:hover, .topbar nav button:hover { color: var(--lime); }
+.topbar nav button.nav-demo-tab { border: 0; padding: 0; color: var(--lime); background: transparent; font: inherit; cursor: pointer; }
 .button { border: 1px solid var(--lime); background: var(--lime); color: var(--ink); border-radius: 4px; padding: 13px 18px; font-weight: 650; display: inline-flex; align-items: center; justify-content: center; gap: 20px; transition: transform .2s ease, background .2s ease; }
 .button:hover { transform: translateY(-1px); background: #e8ff92; }
 .button:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid rgba(137,201,192,.55); outline-offset: 3px; }

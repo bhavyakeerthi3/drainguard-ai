@@ -1168,6 +1168,7 @@ export default function Home() {
     }
     window.requestAnimationFrame(() => {
       document.getElementById(step.id === "act" ? "queue" : step.id === "verify" || step.id === "close" ? "verify" : "inspect")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById("judge-demo-title")?.focus();
     });
   }
 
@@ -1222,7 +1223,7 @@ export default function Home() {
         </a>
         <div className="pilot-pill"><span /> Environmental decision-support prototype</div>
         <nav aria-label="Primary navigation">
-          <a href="#judge-demo">🚀 Judge Demo</a>
+          <button className="nav-demo-tab" type="button" onClick={runJudgeDemo}>🎬 90-sec Demo</button>
           <a href="#inspect">🔍 Inspect</a>
           <a href="#queue">📍 Prioritize</a>
           <a href="#verify">✓ Verify</a>
@@ -1266,7 +1267,7 @@ export default function Home() {
             ))}
           </div>
           <div className="judge-narrator-body">
-            <div><span className="kicker">Step {judgeStep + 1} of {JUDGE_STEPS.length} · {activeJudgeStep.label}</span><h2 id="judge-demo-title">{activeJudgeStep.title}</h2><p>{activeJudgeStep.copy}</p><strong>{activeJudgeStep.hint}</strong></div>
+            <div><span className="kicker">Step {judgeStep + 1} of {JUDGE_STEPS.length} · {activeJudgeStep.label}</span><h2 id="judge-demo-title" tabIndex={-1}>{activeJudgeStep.title}</h2><p>{activeJudgeStep.copy}</p><strong>{activeJudgeStep.hint}</strong></div>
             <div className="judge-narrator-actions">
               <button className="button button-outline" type="button" onClick={() => applyJudgeStep(judgeStep - 1)} disabled={judgeStep === 0}>← Previous</button>
               <button className="button button-dark" type="button" onClick={() => applyJudgeStep(judgeStep + 1)} disabled={judgeStep === JUDGE_STEPS.length - 1}>{judgeStep === JUDGE_STEPS.length - 1 ? "Demo complete ✓" : "Next step →"}</button>
