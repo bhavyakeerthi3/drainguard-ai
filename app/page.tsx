@@ -133,15 +133,6 @@ const DEMO_SCENARIOS: DemoScenario[] = [
   { id: "review", title: "Human review required", description: "Uncertain evidence remains open for a person.", blockage: 67, litter: 51, rainfallMm: 18, status: "Needs review", environmentalDistanceMeters: null },
 ];
 
-const JUDGE_STEPS = [
-  { id: "detect", label: "See", title: "A crew receives a report.", copy: "We begin with visible evidence from the street: a blocked drain, litter, and the current rainfall context.", hint: "Visible evidence first · controlled demonstration data" },
-  { id: "prioritize", label: "Understand", title: "How serious is it?", copy: "The system turns blockage, visible litter, and rainfall into an explainable inspection priority.", hint: "Why this one? Every point has a visible reason." },
-  { id: "shock", label: "Adapt", title: "The drains did not change. The conditions did.", copy: "Move the rainfall scenario and watch scores, rankings, and urgency respond using the same evidence.", hint: "Scenario exploration · not a forecast or flood prediction" },
-  { id: "act", label: "Decide", title: "One crew. A clear action plan.", copy: "We cannot inspect everything, so DrainGuard turns priority into an explainable plan within today's capacity.", hint: "Action Planner · top reports within today's capacity" },
-  { id: "verify", label: "Verify", title: "Cleanup needs evidence.", copy: "A second image must match the same scene and show meaningful improvement before the report can close.", hint: "Upload an after photo to run the real verification gate" },
-  { id: "close", label: "Close the loop", title: "Detection alone is not the finish line.", copy: "DrainGuard supports the decision, the action, and the verification. Uncertain evidence stays visible for human review.", hint: "Verified clear appears only when the evidence passes" },
-] as const;
-
 const UNAVAILABLE_WATERWAY: WaterwayContext = {
   status: "unavailable",
   distanceMeters: null,
@@ -368,8 +359,6 @@ export default function Home() {
   const [verificationReveal, setVerificationReveal] = useState<"idle" | "checking" | "measuring" | "verified" | "review">("idle");
   const [evidenceBySite, setEvidenceBySite] = useState<Record<string, EvidenceRecord>>({});
   const [reviewDecisions, setReviewDecisions] = useState<Record<string, "open" | "approved" | "request-photo">>({});
-  const [judgeMode, setJudgeMode] = useState(false);
-  const [judgeStep, setJudgeStep] = useState(0);
   const [pitchMode, setPitchMode] = useState(false);
   const [crewCount, setCrewCount] = useState(1);
   const [inspectionCapacity, setInspectionCapacity] = useState(2);
@@ -1153,37 +1142,6 @@ export default function Home() {
     if (shouldScroll) window.requestAnimationFrame(() => document.getElementById("inspect")?.scrollIntoView({ behavior: "smooth" }));
   }
 
-  function applyJudgeStep(stepIndex: number) {
-    const nextStep = Math.max(0, Math.min(JUDGE_STEPS.length - 1, stepIndex));
-    const step = JUDGE_STEPS[nextStep];
-    setJudgeStep(nextStep);
-    if (step.id === "detect") {
-      loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "litter") ?? DEMO_SCENARIOS[2], false);
-    } else if (step.id === "prioritize") {
-      loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "litter") ?? DEMO_SCENARIOS[2], false);
-    } else if (step.id === "shock") {
-      loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "rainfall") ?? DEMO_SCENARIOS[3], false);
-    } else if (step.id === "act") {
-      loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "waterway") ?? DEMO_SCENARIOS[4], false);
-    }
-    window.requestAnimationFrame(() => {
-      // Keep the guided tab visible so the judge can click Next step repeatedly.
-      document.getElementById("judge-demo")?.scrollIntoView({ behavior: "smooth", block: "start" });
-      document.getElementById("judge-demo-title")?.focus();
-    });
-  }
-
-  function runJudgeDemo() {
-    const scenario = DEMO_SCENARIOS.find((item) => item.id === "litter") ?? DEMO_SCENARIOS[2];
-    setJudgeMode(true);
-    setJudgeStep(0);
-    setPitchMode(false);
-    setComparisonMode("side-by-side");
-    setComparisonSplit(50);
-    loadDemoScenario(scenario, false);
-    window.setTimeout(() => document.getElementById("judge-demo")?.scrollIntoView({ behavior: "smooth" }), 120);
-  }
-
   function setReviewDecision(site: MapSite, decision: "open" | "approved" | "request-photo") {
     setReviewDecisions((current) => ({ ...current, [site.id]: decision }));
     if (decision === "approved") {
@@ -1213,8 +1171,6 @@ export default function Home() {
     window.setTimeout(() => setCopied(false), 1800);
   }
 
-  const activeJudgeStep = JUDGE_STEPS[judgeStep];
-
   return (
     <main className={pitchMode ? "pitch-mode" : undefined}>
       <header className="topbar">
@@ -1224,7 +1180,6 @@ export default function Home() {
         </a>
         <div className="pilot-pill"><span /> Environmental decision-support prototype</div>
         <nav aria-label="Primary navigation">
-          <button className="nav-demo-tab" type="button" onClick={runJudgeDemo}>🎬 90-sec Demo</button>
           <a href="#inspect">🔍 Inspect</a>
           <a href="#queue">📍 Prioritize</a>
           <a href="#verify">✓ Verify</a>
@@ -1240,8 +1195,7 @@ export default function Home() {
           <h1>Which drain should your crew inspect before the <em>storm?</em></h1>
           <p>DrainGuard turns visible street evidence and changing conditions into explainable inspection priorities—then verifies whether cleanup worked.</p>
           <div className="hero-actions">
-            <button className="button" type="button" onClick={runJudgeDemo}>Run the 90-second judge demo <span>→</span></button>
-            <a className="text-button" href="#inspect">Inspect a drain <span>↘</span></a>
+            <a className="button" href="#inspect">Inspect a drain <span>↘</span></a>
           </div>
           <div className="hero-flow" aria-label="DrainGuard product flow"><span>DETECT</span><i>→</i><span>PRIORITIZE</span><i>→</i><span>ALLOCATE</span><i>→</i><span>ACT</span><i>→</i><span>VERIFY</span></div>
           <div className="resource-pulse" aria-label="Current operational constraint"><div><strong>{crewCount}</strong><span>{crewCount === 1 ? "crew" : "crews"}</span></div><div><strong>{inspectionCapacity}</strong><span>inspections available</span></div><div><strong>{sortedSites.filter((site) => site.status !== "Verified clear").length}</strong><span>reports competing</span></div><p>A decision has to be made.</p></div>
@@ -1258,26 +1212,6 @@ export default function Home() {
           <p>DrainGuard intervenes through <strong>Detect → Prioritize → Priority Shock → Allocate → Verify → Close</strong>.</p>
         </div>
       </section>
-
-      {judgeMode && (
-        <section className="judge-narrator" id="judge-demo" aria-labelledby="judge-demo-title">
-          <div className="judge-narrator-topline"><span>🎬 90-second judge demo</span><strong>Controlled demonstration data</strong></div>
-          <div className="judge-stepper" aria-label="Judge demo progress">
-            {JUDGE_STEPS.map((step, index) => (
-              <button key={step.id} type="button" className={index === judgeStep ? "active" : index < judgeStep ? "complete" : ""} onClick={() => applyJudgeStep(index)}><b>{String(index + 1).padStart(2, "0")}</b><span>{step.label}</span></button>
-            ))}
-          </div>
-          <div className="judge-narrator-body">
-            <div><span className="kicker">Step {judgeStep + 1} of {JUDGE_STEPS.length} · {activeJudgeStep.label}</span><h2 id="judge-demo-title" tabIndex={-1}>{activeJudgeStep.title}</h2><p>{activeJudgeStep.copy}</p><strong>{activeJudgeStep.hint}</strong></div>
-            <div className="judge-narrator-actions">
-              <button className="button button-outline" type="button" onClick={() => applyJudgeStep(judgeStep - 1)} disabled={judgeStep === 0}>← Previous</button>
-              <button className="button button-dark" type="button" onClick={() => applyJudgeStep(judgeStep + 1)} disabled={judgeStep === JUDGE_STEPS.length - 1}>{judgeStep === JUDGE_STEPS.length - 1 ? "Demo complete ✓" : "Next step →"}</button>
-              <button className="text-button" type="button" onClick={() => applyJudgeStep(0)}>Restart</button>
-              <button className="text-button" type="button" onClick={() => setJudgeMode(false)}>Exit demo ×</button>
-            </div>
-          </div>
-        </section>
-      )}
 
       <section className="inspection-section" id="inspect">
         <div className="section-intro">

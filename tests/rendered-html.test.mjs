@@ -94,12 +94,9 @@ test("explains AI evidence and protects the upload path", async () => {
   assert.match(styles, /image-error/);
 });
 
-test("ships the judge walkthrough, operational impact, review actions, and comparison slider", async () => {
+test("ships operational impact, review actions, and comparison slider", async () => {
   const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
-  assert.match(page, /Run the 90-second judge demo/);
-  assert.match(page, /nav-demo-tab/);
-  assert.match(page, /90-second judge demo/);
   assert.match(page, /Operational impact snapshot/);
   assert.match(page, /Queue position/);
   assert.match(page, /Approve closure/);
@@ -107,9 +104,17 @@ test("ships the judge walkthrough, operational impact, review actions, and compa
   assert.match(page, /comparisonSplit/);
   assert.match(page, /Same-drain anchor/);
   assert.match(page, /version: 3/);
-  assert.match(styles, /judge-narrator/);
   assert.match(styles, /impact-strip/);
   assert.match(styles, /comparison-slider/);
+});
+
+test("removes the retired walkthrough surface", async () => {
+  const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const panels = await readFile(new URL("../app/EnvironmentalPanels.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.doesNotMatch(page, /90-second judge demo|nav-demo-tab|judge-narrator|JUDGE_STEPS|runJudgeDemo/);
+  assert.doesNotMatch(panels, /90-second judge walkthrough/);
+  assert.doesNotMatch(styles, /judge-narrator|nav-demo-tab/);
 });
 
 test("ships Priority Shock and transparent capacity allocation", async () => {
@@ -118,8 +123,8 @@ test("ships Priority Shock and transparent capacity allocation", async () => {
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.match(page, /PriorityShockPanel/);
   assert.match(page, /ActionPlanner/);
-  assert.match(page, /The drains did not change\. The conditions did\./);
   assert.match(panels, /Priority Shock/);
+  assert.match(panels, /Same drains\. Different conditions\. Different priorities\./);
   assert.match(panels, /existing scoring logic/);
   assert.match(panels, /Why is this not in today/);
   assert.match(panels, /Transparent capacity allocation/);
