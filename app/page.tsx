@@ -1167,7 +1167,8 @@ export default function Home() {
       loadDemoScenario(DEMO_SCENARIOS.find((item) => item.id === "waterway") ?? DEMO_SCENARIOS[4], false);
     }
     window.requestAnimationFrame(() => {
-      document.getElementById(step.id === "act" ? "queue" : step.id === "verify" || step.id === "close" ? "verify" : "inspect")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      // Keep the guided tab visible so the judge can click Next step repeatedly.
+      document.getElementById("judge-demo")?.scrollIntoView({ behavior: "smooth", block: "start" });
       document.getElementById("judge-demo-title")?.focus();
     });
   }
